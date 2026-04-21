@@ -1,0 +1,12 @@
+node_modules
+dist
+.DS_Store
+*.local
+.env
+.env.*
+src/generatedModelCatalog.ts
+public/models/**/*.glb
+public/models/*.png
+public/models/*.jpg
+public/models/*.jpeg
+public/models/*.webp

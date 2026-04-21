@@ -8,6 +8,7 @@ import {
   Box3,
   CanvasTexture,
   Material,
+  MeshStandardMaterial,
   Mesh,
   Object3D,
   OrthographicCamera,
@@ -25,6 +26,16 @@ type ModelViewerProps = {
 };
 
 type ViewPreset = 'front' | 'back' | 'left' | 'right' | 'top' | 'bottom';
+type TextureChannel = 'color' | 'metalness' | 'bump' | 'alpha';
+
+type TextureSlot = {
+  name: string | null;
+  url: string | null;
+};
+
+type TextureSlots = Record<TextureChannel, TextureSlot>;
+
+type LoadedTextureSlots = Partial<Record<TextureChannel, Texture | null>>;
 
 const viewPresetButtons: Array<{ label: string; value: ViewPreset }> = [
   { label: '前', value: 'front' },
@@ -34,6 +45,20 @@ const viewPresetButtons: Array<{ label: string; value: ViewPreset }> = [
   { label: '顶', value: 'top' },
   { label: '底', value: 'bottom' },
 ];
+
+const textureChannelOptions: Array<{ label: string; helper: string; value: TextureChannel }> = [
+  { label: '颜色', helper: '基础色和图案位置', value: 'color' },
+  { label: '金属', helper: '黑色有效，透明无效', value: 'metalness' },
+  { label: '凹凸', helper: '黑色有效，透明无效', value: 'bump' },
+  { label: '透明', helper: '黑色隐藏，透明显示', value: 'alpha' },
+];
+
+const emptyTextureSlots: TextureSlots = {
+  color: { name: null, url: null },
+  metalness: { name: null, url: null },
+  bump: { name: null, url: null },
+  alpha: { name: null, url: null },
+};
 
 class ModelErrorBoundary extends Component<
   { children: ReactNode; fileName: string },
@@ -74,34 +99,65 @@ function getInitialModel(models: ModelEntry[]) {
   return models.some((model) => model.id === hashId) ? hashId : models[0]?.id ?? '';
 }
 
-function applyTextureToMaterial(material: Material, texture: Texture | null) {
-  if (!texture || !('map' in material) || !material.map) {
-    return material;
-  }
-
+function applyTexturesToMaterial(
+  material: Material,
+  textures: LoadedTextureSlots,
+  textureTransparencyEnabled: boolean,
+) {
   const nextMaterial = material.clone();
+  const standardMaterial = nextMaterial as MeshStandardMaterial;
+  const hasPbrMapTarget =
+    'map' in standardMaterial ||
+    'metalnessMap' in standardMaterial ||
+    'bumpMap' in standardMaterial ||
+    'alphaMap' in standardMaterial;
 
-  if ('map' in nextMaterial) {
-    nextMaterial.map = texture;
+  if (!hasPbrMapTarget) {
+    return nextMaterial;
   }
 
-  if (texture.userData.hasAlpha === true) {
-    nextMaterial.transparent = true;
-    nextMaterial.alphaTest = 0.05;
-    nextMaterial.depthWrite = true;
+  if (textures.color && 'map' in standardMaterial) {
+    standardMaterial.map = textures.color;
+
+    if ('color' in standardMaterial) {
+      standardMaterial.color?.set('#ffffff');
+    }
   }
 
-  if ('color' in nextMaterial) {
-    const materialWithColor = nextMaterial as Material & { color?: { set: (color: string) => void } };
-    materialWithColor.color?.set('#ffffff');
+  if (textures.metalness && 'metalnessMap' in standardMaterial) {
+    standardMaterial.metalnessMap = textures.metalness;
+    standardMaterial.metalness = 1;
+    standardMaterial.roughness = Math.min(standardMaterial.roughness ?? 0.42, 0.42);
+  }
+
+  if (textures.bump && 'bumpMap' in standardMaterial) {
+    standardMaterial.bumpMap = textures.bump;
+    standardMaterial.bumpScale = 2;
+  }
+
+  if (textures.alpha && 'alphaMap' in standardMaterial) {
+    standardMaterial.alphaMap = textures.alpha;
+    standardMaterial.transparent = true;
+    standardMaterial.alphaTest = 0.05;
+    standardMaterial.depthWrite = true;
+  }
+
+  if (textureTransparencyEnabled && textures.color?.userData.hasAlpha === true) {
+    standardMaterial.transparent = true;
+    standardMaterial.alphaTest = Math.max(standardMaterial.alphaTest ?? 0, 0.05);
+    standardMaterial.depthWrite = true;
   }
 
   nextMaterial.needsUpdate = true;
   return nextMaterial;
 }
 
-function cloneSceneWithTexture(scene: Object3D, texture: Texture | null) {
-  if (!texture) {
+function cloneSceneWithTextures(
+  scene: Object3D,
+  textures: LoadedTextureSlots,
+  textureTransparencyEnabled: boolean,
+) {
+  if (!Object.values(textures).some(Boolean)) {
     return scene;
   }
 
@@ -114,14 +170,22 @@ function cloneSceneWithTexture(scene: Object3D, texture: Texture | null) {
     }
 
     mesh.material = Array.isArray(mesh.material)
-      ? mesh.material.map((material) => applyTextureToMaterial(material, texture))
-      : applyTextureToMaterial(mesh.material, texture);
+      ? mesh.material.map((material) => applyTexturesToMaterial(material, textures, textureTransparencyEnabled))
+      : applyTexturesToMaterial(mesh.material, textures, textureTransparencyEnabled);
   });
 
   return nextScene;
 }
 
-function useUploadedTexture(textureUrl: string | null, textureTransparencyEnabled: boolean) {
+function shouldInvertChannel(channel: TextureChannel) {
+  return channel === 'metalness' || channel === 'bump';
+}
+
+function shouldBuildMaskTexture(channel: TextureChannel) {
+  return channel === 'metalness' || channel === 'bump' || channel === 'alpha';
+}
+
+function useUploadedTexture(textureUrl: string | null, channel: TextureChannel, textureTransparencyEnabled: boolean) {
   const [texture, setTexture] = useState<Texture | null>(null);
 
   useEffect(() => {
@@ -143,7 +207,7 @@ function useUploadedTexture(textureUrl: string | null, textureTransparencyEnable
       if (!context) {
         const loader = new TextureLoader();
         loader.load(textureUrl, (nextTexture) => {
-          nextTexture.colorSpace = SRGBColorSpace;
+          nextTexture.colorSpace = channel === 'color' ? SRGBColorSpace : nextTexture.colorSpace;
           nextTexture.flipY = false;
           nextTexture.userData.hasAlpha = false;
           nextTexture.needsUpdate = true;
@@ -173,26 +237,56 @@ function useUploadedTexture(textureUrl: string | null, textureTransparencyEnable
       let textureSource: HTMLCanvasElement | HTMLImageElement = image;
       let alphaEnabled = false;
 
-      if (hasAlpha) {
+      if (hasAlpha || shouldBuildMaskTexture(channel)) {
         const textureCanvas = document.createElement('canvas');
         textureCanvas.width = image.naturalWidth;
         textureCanvas.height = image.naturalHeight;
 
         const textureContext = textureCanvas.getContext('2d');
         if (textureContext) {
-          if (!textureTransparencyEnabled) {
+          if (hasAlpha && channel === 'color' && !textureTransparencyEnabled) {
             textureContext.fillStyle = '#ffffff';
             textureContext.fillRect(0, 0, textureCanvas.width, textureCanvas.height);
           }
           textureContext.drawImage(image, 0, 0);
+
+          if (shouldBuildMaskTexture(channel)) {
+            const textureData = textureContext.getImageData(0, 0, textureCanvas.width, textureCanvas.height);
+
+            for (let index = 0; index < textureData.data.length; index += 4) {
+              const red = textureData.data[index];
+              const green = textureData.data[index + 1];
+              const blue = textureData.data[index + 2];
+              const alpha = textureData.data[index + 3];
+              const luminance = Math.round(red * 0.2126 + green * 0.7152 + blue * 0.0722);
+              const isTransparentPixel = alpha === 0;
+              let maskValue = luminance;
+
+              if (channel === 'metalness' || channel === 'bump') {
+                maskValue = isTransparentPixel ? 0 : 255 - luminance;
+              }
+
+              if (channel === 'alpha') {
+                maskValue = isTransparentPixel ? 255 : luminance;
+              }
+
+              textureData.data[index] = maskValue;
+              textureData.data[index + 1] = maskValue;
+              textureData.data[index + 2] = maskValue;
+              textureData.data[index + 3] = 255;
+            }
+
+            textureContext.putImageData(textureData, 0, 0);
+          }
+
           textureSource = textureCanvas;
-          alphaEnabled = textureTransparencyEnabled;
+          alphaEnabled = channel === 'color' && hasAlpha && textureTransparencyEnabled;
         }
       }
 
       const nextTexture =
         textureSource instanceof HTMLCanvasElement ? new CanvasTexture(textureSource) : new Texture(textureSource);
-      nextTexture.colorSpace = SRGBColorSpace;
+      nextTexture.colorSpace = channel === 'color' ? SRGBColorSpace : nextTexture.colorSpace;
       nextTexture.flipY = false;
       nextTexture.userData.hasAlpha = alphaEnabled;
       nextTexture.needsUpdate = true;
@@ -214,25 +308,37 @@ function useUploadedTexture(textureUrl: string | null, textureTransparencyEnable
         loadedTexture.dispose();
       }
     };
-  }, [textureUrl, textureTransparencyEnabled]);
+  }, [channel, textureUrl, textureTransparencyEnabled]);
 
   return texture;
 }
 
 function ModelAsset({
   model,
-  textureUrl,
+  textureSlots,
   textureTransparencyEnabled,
 }: {
   model: ModelEntry;
-  textureUrl: string | null;
+  textureSlots: TextureSlots;
   textureTransparencyEnabled: boolean;
 }) {
   const gltf = useGLTF(model.path);
-  const uploadedTexture = useUploadedTexture(textureUrl, textureTransparencyEnabled);
+  const colorTexture = useUploadedTexture(textureSlots.color.url, 'color', textureTransparencyEnabled);
+  const metalnessTexture = useUploadedTexture(textureSlots.metalness.url, 'metalness', false);
+  const bumpTexture = useUploadedTexture(textureSlots.bump.url, 'bump', false);
+  const alphaTexture = useUploadedTexture(textureSlots.alpha.url, 'alpha', false);
+  const uploadedTextures = useMemo<LoadedTextureSlots>(
+    () => ({
+      alpha: alphaTexture,
+      bump: bumpTexture,
+      color: colorTexture,
+      metalness: metalnessTexture,
+    }),
+    [alphaTexture, bumpTexture, colorTexture, metalnessTexture],
+  );
   const scene = useMemo(
-    () => cloneSceneWithTexture(gltf.scene, uploadedTexture),
-    [gltf.scene, uploadedTexture],
+    () => cloneSceneWithTextures(gltf.scene, uploadedTextures, textureTransparencyEnabled),
+    [gltf.scene, textureTransparencyEnabled, uploadedTextures],
   );
 
   return (
@@ -259,14 +365,14 @@ function Scene({
   gridVisible,
   resetToken,
   controlsRef,
-  textureUrl,
+  textureSlots,
   textureTransparencyEnabled,
 }: {
   activeModel: ModelEntry;
   gridVisible: boolean;
   resetToken: number;
   controlsRef: React.MutableRefObject<OrbitControlsImpl | null>;
-  textureUrl: string | null;
+  textureSlots: TextureSlots;
   textureTransparencyEnabled: boolean;
 }) {
   const { camera } = useThree();
@@ -312,7 +418,7 @@ function Scene({
         >
             <ModelAsset
               model={activeModel}
-              textureUrl={textureUrl}
+              textureSlots={textureSlots}
               textureTransparencyEnabled={textureTransparencyEnabled}
             />
             <CameraResetter activeModelId={activeModel.id} resetToken={resetToken} />
@@ -447,14 +553,20 @@ export function ModelViewer({ models }: ModelViewerProps) {
   const [gridVisible, setGridVisible] = useState(true);
   const [resetToken, setResetToken] = useState(0);
   const [viewerSplit, setViewerSplit] = useState(64);
-  const [uploadedTextureUrl, setUploadedTextureUrl] = useState<string | null>(null);
-  const [uploadedTextureName, setUploadedTextureName] = useState<string | null>(null);
+  const [textureSlots, setTextureSlots] = useState<TextureSlots>(emptyTextureSlots);
+  const [activeTextureChannel, setActiveTextureChannel] = useState<TextureChannel>('color');
   const [textureTransparencyEnabled, setTextureTransparencyEnabled] = useState(true);
   const [viewPreset, setViewPreset] = useState<ViewPreset | null>(null);
   const [viewPresetToken, setViewPresetToken] = useState(0);
-  const [isTextureDragActive, setIsTextureDragActive] = useState(false);
+  const [dragActiveChannel, setDragActiveChannel] = useState<TextureChannel | null>(null);
   const workbenchRef = useRef<HTMLDivElement | null>(null);
-  const textureInputRef = useRef<HTMLInputElement | null>(null);
+  const textureSlotsRef = useRef(textureSlots);
+  const textureInputRefs = useRef<Record<TextureChannel, HTMLInputElement | null>>({
+    alpha: null,
+    bump: null,
+    color: null,
+    metalness: null,
+  });
   const controlsRef = useRef<OrbitControlsImpl | null>(null);
 
   const activeModel = useMemo(
@@ -477,12 +589,18 @@ export function ModelViewer({ models }: ModelViewerProps) {
   }, [models]);
 
   useEffect(() => {
+    textureSlotsRef.current = textureSlots;
+  }, [textureSlots]);
+
+  useEffect(() => {
     return () => {
-      if (uploadedTextureUrl) {
-        URL.revokeObjectURL(uploadedTextureUrl);
-      }
+      Object.values(textureSlotsRef.current).forEach((textureSlot) => {
+        if (textureSlot.url) {
+          URL.revokeObjectURL(textureSlot.url);
+        }
+      });
     };
-  }, [uploadedTextureUrl]);
+  }, []);
 
   if (!activeModel) {
     return (
@@ -522,7 +640,7 @@ export function ModelViewer({ models }: ModelViewerProps) {
     window.addEventListener('pointerup', onPointerUp, { once: true });
   };
 
-  const applyTextureFile = (file: File | undefined) => {
+  const applyTextureFile = (channel: TextureChannel, file: File | undefined) => {
     if (!file) {
       return;
     }
@@ -532,53 +650,69 @@ export function ModelViewer({ models }: ModelViewerProps) {
     }
 
     const nextTextureUrl = URL.createObjectURL(file);
-    setUploadedTextureUrl((previousTextureUrl) => {
+    setTextureSlots((previousTextureSlots) => {
+      const previousTextureUrl = previousTextureSlots[channel].url;
       if (previousTextureUrl) {
         URL.revokeObjectURL(previousTextureUrl);
       }
-      return nextTextureUrl;
+      return {
+        ...previousTextureSlots,
+        [channel]: {
+          name: file.name,
+          url: nextTextureUrl,
+        },
+      };
     });
-    setUploadedTextureName(file.name);
+    setActiveTextureChannel(channel);
     setResetToken((value) => value + 1);
   };
 
-  const handleTextureUpload = (event: ChangeEvent<HTMLInputElement>) => {
-    applyTextureFile(event.target.files?.[0]);
+  const handleTextureUpload = (channel: TextureChannel, event: ChangeEvent<HTMLInputElement>) => {
+    applyTextureFile(channel, event.target.files?.[0]);
     event.target.value = '';
   };
 
-  const clearUploadedTexture = () => {
-    setUploadedTextureUrl((previousTextureUrl) => {
+  const clearUploadedTexture = (channel: TextureChannel) => {
+    setTextureSlots((previousTextureSlots) => {
+      const previousTextureUrl = previousTextureSlots[channel].url;
       if (previousTextureUrl) {
         URL.revokeObjectURL(previousTextureUrl);
       }
-      return null;
+      return {
+        ...previousTextureSlots,
+        [channel]: {
+          name: null,
+          url: null,
+        },
+      };
     });
-    setUploadedTextureName(null);
   };
 
-  const handleTextureDragOver = (event: DragEvent<HTMLElement>) => {
+  const handleTextureDragOver = (channel: TextureChannel, event: DragEvent<HTMLElement>) => {
     event.preventDefault();
     event.dataTransfer.dropEffect = 'copy';
-    setIsTextureDragActive(true);
+    setDragActiveChannel(channel);
   };
 
-  const handleTextureDragLeave = (event: DragEvent<HTMLElement>) => {
+  const handleTextureDragLeave = (channel: TextureChannel, event: DragEvent<HTMLElement>) => {
     if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
-      setIsTextureDragActive(false);
+      setDragActiveChannel((currentChannel) => (currentChannel === channel ? null : currentChannel));
     }
   };
 
-  const handleTextureDrop = (event: DragEvent<HTMLElement>) => {
+  const handleTextureDrop = (channel: TextureChannel, event: DragEvent<HTMLElement>) => {
     event.preventDefault();
-    setIsTextureDragActive(false);
-    applyTextureFile(event.dataTransfer.files?.[0]);
+    setDragActiveChannel(null);
+    applyTextureFile(channel, event.dataTransfer.files?.[0]);
   };
 
   const applyViewPreset = (nextViewPreset: ViewPreset) => {
     setViewPreset(nextViewPreset);
     setViewPresetToken((value) => value + 1);
   };
+
+  const activeTextureSlot = textureSlots[activeTextureChannel];
+  const uploadedTextureCount = Object.values(textureSlots).filter((textureSlot) => textureSlot.url).length;
 
   return (
     <div className="viewer-panel">
@@ -652,7 +786,7 @@ export function ModelViewer({ models }: ModelViewerProps) {
               gridVisible={gridVisible}
               resetToken={resetToken}
               controlsRef={controlsRef}
-              textureUrl={uploadedTextureUrl}
+              textureSlots={textureSlots}
               textureTransparencyEnabled={textureTransparencyEnabled}
             />
             <ViewPresetController
@@ -671,13 +805,7 @@ export function ModelViewer({ models }: ModelViewerProps) {
           onPointerDown={startSplitDrag}
         />
 
-        <aside
-          className={`uv-panel${isTextureDragActive ? ' is-drag-active' : ''}`}
-          aria-label="UV reference image"
-          onDragOver={handleTextureDragOver}
-          onDragLeave={handleTextureDragLeave}
-          onDrop={handleTextureDrop}
-        >
+        <aside className="uv-panel" aria-label="UV reference image">
           <div className="uv-panel-header">
             <div>
               <span className="eyebrow">UV Reference</span>
@@ -690,36 +818,69 @@ export function ModelViewer({ models }: ModelViewerProps) {
             ) : null}
           </div>
 
-          <div className="texture-actions">
-            <input
-              ref={textureInputRef}
-              className="texture-input"
-              type="file"
-              accept="image/png,image/jpeg,image/webp"
-              onChange={handleTextureUpload}
-            />
-            <button className="texture-button" type="button" onClick={() => textureInputRef.current?.click()}>
-              <Upload size={15} aria-hidden="true" />
-              Upload texture
-            </button>
-            {uploadedTextureUrl ? (
-              <button className="texture-button texture-button-clear" type="button" onClick={clearUploadedTexture}>
-                <X size={15} aria-hidden="true" />
-                Clear
-              </button>
-            ) : null}
+          <div className="texture-actions" aria-label="Texture channel uploads">
+            {textureChannelOptions.map((channelOption) => {
+              const textureSlot = textureSlots[channelOption.value];
+
+              return (
+                <div
+                  className="texture-channel"
+                  data-active={activeTextureChannel === channelOption.value ? 'true' : undefined}
+                  data-drag-active={dragActiveChannel === channelOption.value ? 'true' : undefined}
+                  key={channelOption.value}
+                  onDragOver={(event) => handleTextureDragOver(channelOption.value, event)}
+                  onDragLeave={(event) => handleTextureDragLeave(channelOption.value, event)}
+                  onDrop={(event) => handleTextureDrop(channelOption.value, event)}
+                >
+                  <input
+                    ref={(element) => {
+                      textureInputRefs.current[channelOption.value] = element;
+                    }}
+                    className="texture-input"
+                    type="file"
+                    accept="image/png,image/jpeg,image/webp"
+                    onChange={(event) => handleTextureUpload(channelOption.value, event)}
+                  />
+                  <button
+                    className="texture-channel-main"
+                    type="button"
+                    aria-pressed={activeTextureChannel === channelOption.value}
+                    onClick={() => setActiveTextureChannel(channelOption.value)}
+                  >
+                    <span>
+                      <strong>{channelOption.label}</strong>
+                      <small>{textureSlot.name ?? channelOption.helper}</small>
+                    </span>
+                  </button>
+                  <button
+                    className="texture-channel-upload"
+                    title={`上传${channelOption.label}贴图`}
+                    type="button"
+                    onClick={() => {
+                      setActiveTextureChannel(channelOption.value);
+                      textureInputRefs.current[channelOption.value]?.click();
+                    }}
+                  >
+                    <Upload size={14} aria-hidden="true" />
+                  </button>
+                  {textureSlot.url ? (
+                    <button
+                      className="texture-channel-clear"
+                      title={`清除${channelOption.label}贴图`}
+                      type="button"
+                      onClick={() => clearUploadedTexture(channelOption.value)}
+                    >
+                      <X size={14} aria-hidden="true" />
+                    </button>
+                  ) : null}
+                </div>
+              );
+            })}
           </div>
 
-          {isTextureDragActive ? (
-            <div className="texture-drop-overlay">
-              <Upload size={28} aria-hidden="true" />
-              Drop image to apply texture
-            </div>
-          ) : null}
-
-          {uploadedTextureUrl ? (
+          {activeTextureSlot.url ? (
             <div className="uv-image-frame">
-              <img src={uploadedTextureUrl} alt={`${uploadedTextureName ?? 'Uploaded'} texture preview`} />
+              <img src={activeTextureSlot.url} alt={`${activeTextureSlot.name ?? 'Uploaded'} texture preview`} />
             </div>
           ) : activeModel.uvImagePath ? (
             <div className="uv-image-frame">
@@ -735,8 +896,10 @@ export function ModelViewer({ models }: ModelViewerProps) {
           <div className="uv-caption">
             <ImageIcon size={15} aria-hidden="true" />
             <span>
-              {uploadedTextureName
-                ? `Applied texture: ${uploadedTextureName}`
+              {activeTextureSlot.name
+                ? `${textureChannelOptions.find((option) => option.value === activeTextureChannel)?.label}: ${
+                    activeTextureSlot.name
+                  }`
                 : activeModel.uvImageFileName ?? 'No UV file'}
             </span>
           </div>
@@ -747,6 +910,7 @@ export function ModelViewer({ models }: ModelViewerProps) {
         <span>Left drag rotate</span>
         <span>Wheel zoom</span>
         <span>Right drag pan</span>
+        <span>{uploadedTextureCount} texture maps</span>
       </div>
     </div>
   );

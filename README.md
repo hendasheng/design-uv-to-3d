@@ -1,6 +1,6 @@
 # Design UV to 3D
 
-一个用于检查 UV 设计稿在 GLB 产品模型上贴合效果的轻量 3D 查看工具。
+一个用于检查 UV 设计稿在 3d 产品模型上贴合效果的轻量 3D 查看工具。
 
 项目基于 React、Vite、Three.js、`@react-three/fiber` 和 `@react-three/drei` 构建。应用会自动扫描 `public/models` 目录生成模型列表，支持在浏览器中查看 GLB 模型、切换固定视角、拖拽上传贴图，并对照 UV 参考图检查图案位置。
 
@@ -19,7 +19,7 @@
 
 ```text
 public/models/
-  shared-uv.png
+  Blender_UV.png
   README.md
   产品文件夹/
     本地模型.glb
@@ -79,7 +79,7 @@ npm run generate:models
 - `public/models` 下的每一个直接子文件夹会成为一个模型分组。
 - 分组文件夹中的每一个 `.glb` 文件会成为一个可选择的模型。
 - 如果分组文件夹中有图片文件，会优先作为该分组模型的 UV 参考图。
-- 如果分组文件夹中没有图片，则会回退使用 `public/models` 根目录下的参考图。
+- 如果分组文件夹中没有图片，则会回退使用 `public/models` 根目录下的参考图，例如 `Blender_UV.png`。
 - 文件路径会自动进行 URL 编码，支持中文文件夹名和文件名。
 - `.glb` 模型文件默认不会提交到 Git 仓库，请在本地或部署环境中自行放入 `public/models`。
 
@@ -102,4 +102,4 @@ npm run generate:models
 
 - 建议压缩 GLB 和贴图资源，避免浏览器加载过慢。
 - `src/generatedModelCatalog.ts` 是自动生成文件，不需要手动维护。
-- UV 参考图位于 `public/models` 或具体产品文件夹中，模型文件可以按项目需要在本地替换或扩展。
+- 默认 UV 参考图为 `public/models/Blender_UV.png`，模型文件可以按项目需要在本地替换或扩展。

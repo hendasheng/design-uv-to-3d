@@ -10,3 +10,4 @@ public/models/*.png
 public/models/*.jpg
 public/models/*.jpeg
 public/models/*.webp
+!public/models/Blender_UV.png

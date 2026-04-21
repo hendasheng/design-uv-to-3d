@@ -8,7 +8,7 @@ Recommended structure:
 
 ```text
 public/models/
-  shared-uv.png
+  Blender_UV.png
   product-a/
     model-01.glb
     model-02.glb
@@ -22,4 +22,4 @@ Each direct child folder under `public/models` becomes a group in the left model
 UV image detection:
 
 - If a product folder contains an image file, that image is used for models in that folder.
-- If the product folder has no image, the app falls back to a root-level image in `public/models`.
+- If the product folder has no image, the app falls back to a root-level image in `public/models`, such as `Blender_UV.png`.

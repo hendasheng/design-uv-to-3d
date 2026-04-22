@@ -11,3 +11,8 @@ public/models/*.jpg
 public/models/*.jpeg
 public/models/*.webp
 !public/models/Blender_UV.png
+!public/models/uv/
+!public/models/uv/*.png
+!public/models/uv/*.jpg
+!public/models/uv/*.jpeg
+!public/models/uv/*.webp

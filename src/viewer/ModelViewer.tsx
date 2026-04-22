@@ -315,15 +315,18 @@ function useUploadedTexture(textureUrl: string | null, channel: TextureChannel, 
 
 function ModelAsset({
   model,
+  selectedUvImagePath,
   textureSlots,
   textureTransparencyEnabled,
 }: {
   model: ModelEntry;
+  selectedUvImagePath?: string;
   textureSlots: TextureSlots;
   textureTransparencyEnabled: boolean;
 }) {
   const gltf = useGLTF(model.path);
-  const colorTexture = useUploadedTexture(textureSlots.color.url, 'color', textureTransparencyEnabled);
+  const colorTextureUrl = textureSlots.color.url ?? selectedUvImagePath ?? null;
+  const colorTexture = useUploadedTexture(colorTextureUrl, 'color', textureTransparencyEnabled);
   const metalnessTexture = useUploadedTexture(textureSlots.metalness.url, 'metalness', false);
   const bumpTexture = useUploadedTexture(textureSlots.bump.url, 'bump', false);
   const alphaTexture = useUploadedTexture(textureSlots.alpha.url, 'alpha', false);
@@ -365,6 +368,7 @@ function Scene({
   gridVisible,
   resetToken,
   controlsRef,
+  selectedUvImagePath,
   textureSlots,
   textureTransparencyEnabled,
 }: {
@@ -372,6 +376,7 @@ function Scene({
   gridVisible: boolean;
   resetToken: number;
   controlsRef: React.MutableRefObject<OrbitControlsImpl | null>;
+  selectedUvImagePath?: string;
   textureSlots: TextureSlots;
   textureTransparencyEnabled: boolean;
 }) {
@@ -418,6 +423,7 @@ function Scene({
         >
             <ModelAsset
               model={activeModel}
+              selectedUvImagePath={selectedUvImagePath}
               textureSlots={textureSlots}
               textureTransparencyEnabled={textureTransparencyEnabled}
             />
@@ -559,6 +565,7 @@ export function ModelViewer({ models }: ModelViewerProps) {
   const [viewPreset, setViewPreset] = useState<ViewPreset | null>(null);
   const [viewPresetToken, setViewPresetToken] = useState(0);
   const [dragActiveChannel, setDragActiveChannel] = useState<TextureChannel | null>(null);
+  const [selectedUvPath, setSelectedUvPath] = useState<string | null>(null);
   const workbenchRef = useRef<HTMLDivElement | null>(null);
   const textureSlotsRef = useRef(textureSlots);
   const textureInputRefs = useRef<Record<TextureChannel, HTMLInputElement | null>>({
@@ -573,6 +580,11 @@ export function ModelViewer({ models }: ModelViewerProps) {
     () => models.find((model) => model.id === activeId) ?? models[0],
     [activeId, models],
   );
+  const availableUvImages = activeModel?.uvImages ?? [];
+  const selectedUvImage =
+    availableUvImages.find((uvImage) => uvImage.path === selectedUvPath) ??
+    availableUvImages.find((uvImage) => uvImage.path === activeModel?.uvImagePath) ??
+    availableUvImages[0];
 
   useEffect(() => {
     const onHashChange = () => {
@@ -591,6 +603,10 @@ export function ModelViewer({ models }: ModelViewerProps) {
   useEffect(() => {
     textureSlotsRef.current = textureSlots;
   }, [textureSlots]);
+
+  useEffect(() => {
+    setSelectedUvPath(null);
+  }, [activeModel?.id]);
 
   useEffect(() => {
     return () => {
@@ -686,6 +702,20 @@ export function ModelViewer({ models }: ModelViewerProps) {
         },
       };
     });
+  };
+
+  const clearAllUploadedTextures = () => {
+    setTextureSlots((previousTextureSlots) => {
+      Object.values(previousTextureSlots).forEach((textureSlot) => {
+        if (textureSlot.url) {
+          URL.revokeObjectURL(textureSlot.url);
+        }
+      });
+
+      return emptyTextureSlots;
+    });
+    setActiveTextureChannel('color');
+    setDragActiveChannel(null);
   };
 
   const handleTextureDragOver = (channel: TextureChannel, event: DragEvent<HTMLElement>) => {
@@ -786,6 +816,7 @@ export function ModelViewer({ models }: ModelViewerProps) {
               gridVisible={gridVisible}
               resetToken={resetToken}
               controlsRef={controlsRef}
+              selectedUvImagePath={selectedUvImage?.path}
               textureSlots={textureSlots}
               textureTransparencyEnabled={textureTransparencyEnabled}
             />
@@ -811,8 +842,8 @@ export function ModelViewer({ models }: ModelViewerProps) {
               <span className="eyebrow">UV Reference</span>
               <h3>Texture layout</h3>
             </div>
-            {activeModel.uvImagePath ? (
-              <a className="uv-open-link" href={activeModel.uvImagePath} target="_blank" rel="noreferrer">
+            {selectedUvImage ? (
+              <a className="uv-open-link" href={selectedUvImage.path} target="_blank" rel="noreferrer">
                 UV
               </a>
             ) : null}
@@ -876,15 +907,41 @@ export function ModelViewer({ models }: ModelViewerProps) {
                 </div>
               );
             })}
+            <button
+              className="texture-clear-all"
+              type="button"
+              disabled={uploadedTextureCount === 0}
+              onClick={clearAllUploadedTextures}
+            >
+              <X size={14} aria-hidden="true" />
+              清空所有贴图
+            </button>
           </div>
+
+          {availableUvImages.length > 0 ? (
+            <div className="uv-switcher">
+              <label htmlFor="uv-reference-select">UV 图</label>
+              <select
+                id="uv-reference-select"
+                value={selectedUvImage?.path ?? ''}
+                onChange={(event) => setSelectedUvPath(event.currentTarget.value)}
+              >
+                {availableUvImages.map((uvImage) => (
+                  <option key={uvImage.path} value={uvImage.path}>
+                    {uvImage.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          ) : null}
 
           {activeTextureSlot.url ? (
             <div className="uv-image-frame">
               <img src={activeTextureSlot.url} alt={`${activeTextureSlot.name ?? 'Uploaded'} texture preview`} />
             </div>
-          ) : activeModel.uvImagePath ? (
+          ) : selectedUvImage ? (
             <div className="uv-image-frame">
-              <img src={activeModel.uvImagePath} alt={`${activeModel.name} UV layout`} />
+              <img src={selectedUvImage.path} alt={`${selectedUvImage.name} UV layout`} />
             </div>
           ) : (
             <div className="uv-empty">
@@ -900,7 +957,7 @@ export function ModelViewer({ models }: ModelViewerProps) {
                 ? `${textureChannelOptions.find((option) => option.value === activeTextureChannel)?.label}: ${
                     activeTextureSlot.name
                   }`
-                : activeModel.uvImageFileName ?? 'No UV file'}
+                : selectedUvImage?.fileName ?? 'No UV file'}
             </span>
           </div>
         </aside>

@@ -3,6 +3,8 @@ import path from 'node:path';
 
 const rootDir = process.cwd();
 const modelsDir = path.join(rootDir, 'public', 'models');
+const sharedUvDirName = 'uv';
+const sharedUvDir = path.join(modelsDir, sharedUvDirName);
 const outputPath = path.join(rootDir, 'src', 'generatedModelCatalog.ts');
 const modelExtensions = new Set(['.glb']);
 const imageExtensions = new Set(['.png', '.jpg', '.jpeg', '.webp']);
@@ -21,6 +23,16 @@ function hashPath(value) {
 
 function nameWithoutExtension(fileName) {
   return fileName.replace(/\.[^.]+$/, '');
+}
+
+function toUvEntry(imagePath) {
+  const fileName = path.basename(imagePath);
+
+  return {
+    fileName,
+    name: nameWithoutExtension(fileName),
+    path: toPublicPath(imagePath),
+  };
 }
 
 async function getDirEntries(dir) {
@@ -44,10 +56,16 @@ async function findImagesInDir(dir) {
 
 async function buildCatalog() {
   const rootImages = await findImagesInDir(modelsDir);
-  const fallbackUv = rootImages.find((imagePath) => /uv/i.test(path.basename(imagePath))) ?? rootImages[0];
+  const sharedUvImages = await findImagesInDir(sharedUvDir);
+  const sharedUvEntries = sharedUvImages.map(toUvEntry);
+  const fallbackUv =
+    sharedUvEntries.find((uvImage) => /uv/i.test(uvImage.fileName)) ??
+    sharedUvEntries[0] ??
+    rootImages.map(toUvEntry).find((uvImage) => /uv/i.test(uvImage.fileName)) ??
+    rootImages.map(toUvEntry)[0];
   const entries = await getDirEntries(modelsDir);
   const groups = entries
-    .filter((entry) => entry.isDirectory() && !entry.name.startsWith('.'))
+    .filter((entry) => entry.isDirectory() && !entry.name.startsWith('.') && entry.name !== sharedUvDirName)
     .sort((a, b) => a.name.localeCompare(b.name, 'zh-Hans-CN'));
 
   const models = [];
@@ -56,7 +74,12 @@ async function buildCatalog() {
     const groupDir = path.join(modelsDir, group.name);
     const groupEntries = await getDirEntries(groupDir);
     const groupImages = await findImagesInDir(groupDir);
-    const groupUv = groupImages.find((imagePath) => /uv/i.test(path.basename(imagePath))) ?? groupImages[0] ?? fallbackUv;
+    const groupUvEntries = groupImages.map(toUvEntry);
+    const uvImages = [...groupUvEntries, ...sharedUvEntries];
+    const groupUv =
+      uvImages.find((uvImage) => /uv/i.test(uvImage.fileName)) ??
+      uvImages[0] ??
+      fallbackUv;
     const glbFiles = groupEntries
       .filter((entry) => entry.isFile() && modelExtensions.has(path.extname(entry.name).toLowerCase()))
       .map((entry) => path.join(groupDir, entry.name))
@@ -70,8 +93,9 @@ async function buildCatalog() {
         groupName: group.name,
         fileName: path.basename(glbPath),
         path: toPublicPath(glbPath),
-        uvImageFileName: groupUv ? path.basename(groupUv) : undefined,
-        uvImagePath: groupUv ? toPublicPath(groupUv) : undefined,
+        uvImages,
+        uvImageFileName: groupUv?.fileName,
+        uvImagePath: groupUv?.path,
       });
     }
   }

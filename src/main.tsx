@@ -20,7 +20,7 @@ function App() {
             <Box size={20} aria-hidden="true" />
           </div>
           <div>
-            <h1>GLB Viewer</h1>
+            <h1>模型预览</h1>
             <p>{modelCatalog.length} built-in slots</p>
           </div>
         </div>

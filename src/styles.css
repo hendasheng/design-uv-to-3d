@@ -390,7 +390,7 @@ a {
 .uv-panel {
   position: relative;
   display: grid;
-  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  grid-template-rows: auto auto auto minmax(0, 1fr) auto;
   min-width: 0;
   min-height: 0;
   background:
@@ -446,6 +446,41 @@ a {
 .uv-open-link:focus-visible {
   border-color: #b38437;
   background: #efd49b;
+  outline: none;
+}
+
+.uv-switcher {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 8px;
+  min-height: 0;
+  padding: 8px 14px 4px;
+  border-bottom: 1px solid rgba(39, 35, 29, 0.1);
+  background: rgba(242, 239, 231, 0.72);
+}
+
+.uv-switcher label {
+  color: #5b5348;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.uv-switcher select {
+  width: min(240px, 100%);
+  height: 28px;
+  padding: 0 24px 0 9px;
+  color: #342f27;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  border: 1px solid rgba(39, 35, 29, 0.16);
+  border-radius: 8px;
+  background: #fffdf7;
+}
+
+.uv-switcher select:focus-visible {
+  border-color: #b38437;
   outline: none;
 }
 
@@ -590,6 +625,42 @@ a {
   border-color: rgba(106, 48, 39, 0.34);
   background: #ffe9df;
   outline: none;
+}
+
+.texture-clear-all {
+  display: inline-flex;
+  grid-column: 1 / -1;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 32px;
+  color: #6a3027;
+  font-size: 13px;
+  font-weight: 800;
+  border: 1px solid rgba(106, 48, 39, 0.18);
+  border-radius: 8px;
+  background: #fff8f4;
+  cursor: pointer;
+}
+
+.texture-clear-all:hover,
+.texture-clear-all:focus-visible {
+  border-color: rgba(106, 48, 39, 0.34);
+  background: #ffe9df;
+  outline: none;
+}
+
+.texture-clear-all:disabled {
+  color: #9d9488;
+  border-color: rgba(39, 35, 29, 0.1);
+  background: rgba(255, 253, 247, 0.54);
+  cursor: not-allowed;
+}
+
+.texture-clear-all:disabled:hover,
+.texture-clear-all:disabled:focus-visible {
+  border-color: rgba(39, 35, 29, 0.1);
+  background: rgba(255, 253, 247, 0.54);
 }
 
 .uv-image-frame {

@@ -21,7 +21,8 @@
 
 ```text
 public/models/
-  Blender_UV.png
+  uv/
+    Blender_UV.png
   README.md
   产品文件夹/
     本地模型.glb
@@ -79,9 +80,10 @@ npm run generate:models
 规则如下：
 
 - `public/models` 下的每一个直接子文件夹会成为一个模型分组。
+- `public/models/uv` 是全局 UV 参考图库，不会成为模型分组。
 - 分组文件夹中的每一个 `.glb` 文件会成为一个可选择的模型。
-- 如果分组文件夹中有图片文件，会优先作为该分组模型的 UV 参考图。
-- 如果分组文件夹中没有图片，则会回退使用 `public/models` 根目录下的参考图，例如 `Blender_UV.png`。
+- 如果分组文件夹中有图片文件，会优先作为该分组模型的 UV 参考图选项。
+- `public/models/uv` 下的图片会作为全局 UV 参考图选项，界面中可切换查看。
 - 文件路径会自动进行 URL 编码，支持中文文件夹名和文件名。
 - `.glb` 模型文件默认不会提交到 Git 仓库，请在本地或部署环境中自行放入 `public/models`。
 
@@ -89,7 +91,7 @@ npm run generate:models
 
 1. 在 `public/models` 下创建一个产品文件夹，例如 `public/models/新产品`。
 2. 将一个或多个 `.glb` 文件放入该文件夹。
-3. 可选：将对应的 UV 参考图放入同一个产品文件夹。
+3. 可选：将对应的 UV 参考图放入同一个产品文件夹，或放入 `public/models/uv` 作为全局参考图。
 4. 运行 `npm run dev` 或 `npm run generate:models` 重新生成目录。
 
 ## 使用说明
@@ -98,10 +100,10 @@ npm run generate:models
 - 中央区域查看 3D 模型，可使用鼠标旋转、平移和缩放。
 - 点击视角按钮可快速切换前、后、左、右、顶、底视图。
 - 将贴图图片拖入查看区域，或点击上传按钮选择图片，即可将贴图应用到当前模型。
-- 右侧会展示当前模型关联的 UV 参考图，用于对照图案位置。
+- 右侧可切换当前模型关联的 UV 参考图，用于对照图案位置。
 
 ## 注意事项
 
 - 建议压缩 GLB 和贴图资源，避免浏览器加载过慢。
 - `src/generatedModelCatalog.ts` 是自动生成文件，不需要手动维护。
-- 默认 UV 参考图为 `public/models/Blender_UV.png`，模型文件可以按项目需要在本地替换或扩展。
+- 默认 UV 参考图位于 `public/models/uv`，模型文件可以按项目需要在本地替换或扩展。

@@ -116,7 +116,9 @@ function applyTexturesToMaterial(
     return nextMaterial;
   }
 
-  if (textures.color && 'map' in standardMaterial) {
+  const hasBaseColorMap = 'map' in standardMaterial && Boolean(standardMaterial.map);
+
+  if (textures.color && hasBaseColorMap) {
     standardMaterial.map = textures.color;
 
     if ('color' in standardMaterial) {
@@ -142,7 +144,7 @@ function applyTexturesToMaterial(
     standardMaterial.depthWrite = true;
   }
 
-  if (textureTransparencyEnabled && textures.color?.userData.hasAlpha === true) {
+  if (hasBaseColorMap && textureTransparencyEnabled && textures.color?.userData.hasAlpha === true) {
     standardMaterial.transparent = true;
     standardMaterial.alphaTest = Math.max(standardMaterial.alphaTest ?? 0, 0.05);
     standardMaterial.depthWrite = true;

@@ -315,6 +315,43 @@ a {
   background: #fff8f4;
 }
 
+.viewer-select {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 36px;
+  padding: 0 10px;
+  color: #342f27;
+  font-size: 12px;
+  font-weight: 800;
+  white-space: nowrap;
+  border: 1px solid rgba(39, 35, 29, 0.16);
+  border-radius: 8px;
+  background: #fffdf7;
+}
+
+.viewer-select span {
+  color: #5b5348;
+}
+
+.viewer-select select {
+  min-width: 90px;
+  height: 28px;
+  padding: 0 24px 0 9px;
+  color: #342f27;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 800;
+  border: 1px solid rgba(39, 35, 29, 0.16);
+  border-radius: 7px;
+  background: #fffdf7;
+}
+
+.viewer-select select:focus-visible {
+  border-color: #b38437;
+  outline: none;
+}
+
 .icon-button {
   display: grid;
   place-items: center;
@@ -345,6 +382,41 @@ a {
 .canvas-wrap {
   position: relative;
   min-height: 520px;
+}
+
+.viewer-note-card {
+  position: absolute;
+  top: 14px;
+  left: 14px;
+  z-index: 2;
+  display: grid;
+  gap: 5px;
+  max-width: min(420px, calc(100% - 28px));
+  padding: 14px 16px;
+  color: #342f27;
+  font-size: 13px;
+  line-height: 1.5;
+  border: 1px solid rgba(122, 91, 40, 0.2);
+  border-radius: 10px;
+  background: rgba(255, 250, 240, 0.95);
+  box-shadow: 0 14px 32px rgba(39, 35, 29, 0.16);
+  backdrop-filter: blur(8px);
+}
+
+.viewer-note-card strong {
+  font-size: 16px;
+  line-height: 1.2;
+}
+
+.viewer-note-card span {
+  color: #5b5348;
+}
+
+.viewer-note-card em {
+  color: #7a5b28;
+  font-size: inherit;
+  font-style: normal;
+  font-weight: 700;
 }
 
 .canvas-wrap canvas {

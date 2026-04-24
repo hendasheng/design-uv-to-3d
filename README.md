@@ -21,6 +21,10 @@
 
 ```text
 public/models/
+  示例模型/
+    01.glb
+  示例 UV/
+    01_UV.png
   uv/
     Blender_UV.png
   README.md
@@ -67,6 +71,13 @@ npm run build
 npm run preview
 ```
 
+## 示例资源
+
+- 仓库自带 `示例模型` 和 `示例 UV`
+- 它们是功能示例，方便初次使用时理解基本用法
+- 除这两组外，其他业务模型仍建议本地管理
+- 首次打开时，可以先用这两组资源体验基本查看、贴图上传和 UV 对照流程
+
 ## 模型目录规则
 
 模型目录由脚本自动生成：
@@ -86,6 +97,7 @@ npm run generate:models
 - `public/models/uv` 下的图片会作为全局 UV 参考图选项，界面中可切换查看。
 - 文件路径会自动进行 URL 编码，支持中文文件夹名和文件名。
 - `.glb` 模型文件默认不会提交到 Git 仓库，请在本地或部署环境中自行放入 `public/models`。
+- 例外：`public/models/示例模型` 和 `public/models/示例 UV` 会随仓库提交，作为首次使用时的功能示例。
 
 ## 添加新模型
 
@@ -107,3 +119,4 @@ npm run generate:models
 - 建议压缩 GLB 和贴图资源，避免浏览器加载过慢。
 - `src/generatedModelCatalog.ts` 是自动生成文件，不需要手动维护。
 - 默认 UV 参考图位于 `public/models/uv`，模型文件可以按项目需要在本地替换或扩展。
+- 除 `示例模型` 和 `示例 UV` 外，其他业务模型默认仍按本地资源处理，不建议直接提交大体积 GLB 到仓库。

@@ -18,6 +18,7 @@ import {
   TextureLoader,
   Vector3,
 } from 'three';
+import { toCreasedNormals } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib';
 import type { ModelEntry } from '../modelCatalog';
 
@@ -27,6 +28,7 @@ type ModelViewerProps = {
 
 type ViewPreset = 'front' | 'back' | 'left' | 'right' | 'top' | 'bottom';
 type TextureChannel = 'color' | 'metalness' | 'bump' | 'alpha';
+type ShadingPreset = 'source' | '30' | '45' | '60' | '90';
 
 type TextureSlot = {
   name: string | null;
@@ -51,6 +53,14 @@ const textureChannelOptions: Array<{ label: string; helper: string; value: Textu
   { label: '金属', helper: '黑色有效，透明无效', value: 'metalness' },
   { label: '凹凸', helper: '黑色有效，透明无效', value: 'bump' },
   { label: '透明', helper: '黑色隐藏，透明显示', value: 'alpha' },
+];
+
+const shadingPresetOptions: Array<{ label: string; value: ShadingPreset }> = [
+  { label: '原始法线', value: 'source' },
+  { label: '30°', value: '30' },
+  { label: '45°', value: '45' },
+  { label: '60°', value: '60' },
+  { label: '90°', value: '90' },
 ];
 
 const emptyTextureSlots: TextureSlots = {
@@ -97,6 +107,10 @@ function getInitialModel(models: ModelEntry[]) {
 
   const hashId = window.location.hash.replace('#', '');
   return models.some((model) => model.id === hashId) ? hashId : models[0]?.id ?? '';
+}
+
+function isExampleModel(model: ModelEntry | undefined) {
+  return model?.groupName === '示例' || model?.groupName === '示例模型';
 }
 
 function applyTexturesToMaterial(
@@ -158,25 +172,65 @@ function cloneSceneWithTextures(
   scene: Object3D,
   textures: LoadedTextureSlots,
   textureTransparencyEnabled: boolean,
+  shadingPreset: ShadingPreset,
 ) {
-  if (!Object.values(textures).some(Boolean)) {
+  const shouldCloneForTextures = Object.values(textures).some(Boolean);
+  const shouldCloneForNormals = shadingPreset !== 'source';
+
+  if (!shouldCloneForTextures && !shouldCloneForNormals) {
     return scene;
   }
 
   const nextScene = scene.clone(true);
+  const creaseAngle = Number(shadingPreset) * (Math.PI / 180);
 
   nextScene.traverse((child) => {
     const mesh = child as Mesh;
-    if (!mesh.isMesh || !mesh.material) {
+    if (!mesh.isMesh) {
       return;
     }
 
-    mesh.material = Array.isArray(mesh.material)
-      ? mesh.material.map((material) => applyTexturesToMaterial(material, textures, textureTransparencyEnabled))
-      : applyTexturesToMaterial(mesh.material, textures, textureTransparencyEnabled);
+    if (shouldCloneForNormals && mesh.geometry) {
+      mesh.geometry = toCreasedNormals(mesh.geometry.clone(), creaseAngle);
+      mesh.geometry.userData.codexOwnedGeometry = true;
+    }
+
+    if (shouldCloneForTextures && mesh.material) {
+      mesh.material = Array.isArray(mesh.material)
+        ? mesh.material.map((material) => {
+            const nextMaterial = applyTexturesToMaterial(material, textures, textureTransparencyEnabled);
+            nextMaterial.userData.codexOwnedMaterial = true;
+            return nextMaterial;
+          })
+        : (() => {
+            const nextMaterial = applyTexturesToMaterial(mesh.material, textures, textureTransparencyEnabled);
+            nextMaterial.userData.codexOwnedMaterial = true;
+            return nextMaterial;
+          })();
+    }
   });
 
   return nextScene;
+}
+
+function disposeDisplayScene(scene: Object3D) {
+  scene.traverse((child) => {
+    const mesh = child as Mesh;
+    if (!mesh.isMesh) {
+      return;
+    }
+
+    if (mesh.geometry?.userData.codexOwnedGeometry) {
+      mesh.geometry.dispose();
+    }
+
+    const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+    materials.forEach((material) => {
+      if (material?.userData.codexOwnedMaterial) {
+        material.dispose();
+      }
+    });
+  });
 }
 
 function shouldInvertChannel(channel: TextureChannel) {
@@ -320,11 +374,13 @@ function ModelAsset({
   selectedUvImagePath,
   textureSlots,
   textureTransparencyEnabled,
+  shadingPreset,
 }: {
   model: ModelEntry;
   selectedUvImagePath?: string;
   textureSlots: TextureSlots;
   textureTransparencyEnabled: boolean;
+  shadingPreset: ShadingPreset;
 }) {
   const gltf = useGLTF(model.path);
   const colorTextureUrl = textureSlots.color.url ?? selectedUvImagePath ?? null;
@@ -342,9 +398,17 @@ function ModelAsset({
     [alphaTexture, bumpTexture, colorTexture, metalnessTexture],
   );
   const scene = useMemo(
-    () => cloneSceneWithTextures(gltf.scene, uploadedTextures, textureTransparencyEnabled),
-    [gltf.scene, textureTransparencyEnabled, uploadedTextures],
+    () => cloneSceneWithTextures(gltf.scene, uploadedTextures, textureTransparencyEnabled, shadingPreset),
+    [gltf.scene, shadingPreset, textureTransparencyEnabled, uploadedTextures],
   );
+
+  useEffect(() => {
+    if (scene === gltf.scene) {
+      return;
+    }
+
+    return () => disposeDisplayScene(scene);
+  }, [gltf.scene, scene]);
 
   return (
     <group name="active-model-root">
@@ -373,6 +437,7 @@ function Scene({
   selectedUvImagePath,
   textureSlots,
   textureTransparencyEnabled,
+  shadingPreset,
 }: {
   activeModel: ModelEntry;
   gridVisible: boolean;
@@ -381,6 +446,7 @@ function Scene({
   selectedUvImagePath?: string;
   textureSlots: TextureSlots;
   textureTransparencyEnabled: boolean;
+  shadingPreset: ShadingPreset;
 }) {
   const { camera } = useThree();
 
@@ -428,6 +494,7 @@ function Scene({
               selectedUvImagePath={selectedUvImagePath}
               textureSlots={textureSlots}
               textureTransparencyEnabled={textureTransparencyEnabled}
+              shadingPreset={shadingPreset}
             />
             <CameraResetter activeModelId={activeModel.id} resetToken={resetToken} />
           </Suspense>
@@ -564,6 +631,7 @@ export function ModelViewer({ models }: ModelViewerProps) {
   const [textureSlots, setTextureSlots] = useState<TextureSlots>(emptyTextureSlots);
   const [activeTextureChannel, setActiveTextureChannel] = useState<TextureChannel>('color');
   const [textureTransparencyEnabled, setTextureTransparencyEnabled] = useState(true);
+  const [shadingPreset, setShadingPreset] = useState<ShadingPreset>('45');
   const [viewPreset, setViewPreset] = useState<ViewPreset | null>(null);
   const [viewPresetToken, setViewPresetToken] = useState(0);
   const [dragActiveChannel, setDragActiveChannel] = useState<TextureChannel | null>(null);
@@ -778,6 +846,16 @@ export function ModelViewer({ models }: ModelViewerProps) {
           >
             开启贴图透明
           </button>
+          <label className="viewer-select">
+            <span>硬边角度</span>
+            <select value={shadingPreset} onChange={(event) => setShadingPreset(event.currentTarget.value as ShadingPreset)}>
+              {shadingPresetOptions.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
           <button
             className="icon-button"
             title={gridVisible ? 'Hide grid' : 'Show grid'}
@@ -807,6 +885,14 @@ export function ModelViewer({ models }: ModelViewerProps) {
         style={{ '--viewer-split': `${viewerSplit}%` } as React.CSSProperties}
       >
         <div className="canvas-wrap">
+          {isExampleModel(activeModel) ? (
+            <div className="viewer-note-card" role="note">
+              <strong>示例模型贴图 / UV</strong>
+              <span>
+                公盘：<em>Studio NAEO / 平面贴图到 3d-web / 示例</em>
+              </span>
+            </div>
+          ) : null}
           <Canvas
             orthographic
             camera={{ position: [4, 3, 5], zoom: 90, near: 0.05, far: 80 }}
@@ -821,6 +907,7 @@ export function ModelViewer({ models }: ModelViewerProps) {
               selectedUvImagePath={selectedUvImage?.path}
               textureSlots={textureSlots}
               textureTransparencyEnabled={textureTransparencyEnabled}
+              shadingPreset={shadingPreset}
             />
             <ViewPresetController
               activeModel={activeModel}

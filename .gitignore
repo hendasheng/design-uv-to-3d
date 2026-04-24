@@ -10,6 +10,13 @@ public/models/*.png
 public/models/*.jpg
 public/models/*.jpeg
 public/models/*.webp
+!public/models/示例模型/
+!public/models/示例模型/*.glb
+!public/models/示例\ UV/
+!public/models/示例\ UV/*.png
+!public/models/示例\ UV/*.jpg
+!public/models/示例\ UV/*.jpeg
+!public/models/示例\ UV/*.webp
 !public/models/Blender_UV.png
 !public/models/uv/
 !public/models/uv/*.png

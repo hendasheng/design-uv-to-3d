@@ -8,6 +8,7 @@ const sharedUvDir = path.join(modelsDir, sharedUvDirName);
 const outputPath = path.join(rootDir, 'src', 'generatedModelCatalog.ts');
 const modelExtensions = new Set(['.glb']);
 const imageExtensions = new Set(['.png', '.jpg', '.jpeg', '.webp']);
+const prioritizedGroupNames = new Set(['示例', '示例模型']);
 
 function toPublicPath(filePath) {
   return `/${path.relative(path.join(rootDir, 'public'), filePath).split(path.sep).map(encodeURIComponent).join('/')}`;
@@ -54,6 +55,17 @@ async function findImagesInDir(dir) {
     .sort((a, b) => a.localeCompare(b, 'zh-Hans-CN'));
 }
 
+function compareGroupEntries(a, b) {
+  const aPriority = prioritizedGroupNames.has(a.name) ? 0 : 1;
+  const bPriority = prioritizedGroupNames.has(b.name) ? 0 : 1;
+
+  if (aPriority !== bPriority) {
+    return aPriority - bPriority;
+  }
+
+  return a.name.localeCompare(b.name, 'zh-Hans-CN');
+}
+
 async function buildCatalog() {
   const rootImages = await findImagesInDir(modelsDir);
   const sharedUvImages = await findImagesInDir(sharedUvDir);
@@ -66,7 +78,7 @@ async function buildCatalog() {
   const entries = await getDirEntries(modelsDir);
   const groups = entries
     .filter((entry) => entry.isDirectory() && !entry.name.startsWith('.') && entry.name !== sharedUvDirName)
-    .sort((a, b) => a.name.localeCompare(b.name, 'zh-Hans-CN'));
+    .sort(compareGroupEntries);
 
   const models = [];
 

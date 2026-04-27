@@ -15,7 +15,6 @@ import {
   PerspectiveCamera,
   SRGBColorSpace,
   Texture,
-  TextureLoader,
   Vector3,
 } from 'three';
 import { toCreasedNormals } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
@@ -38,6 +37,23 @@ type TextureSlot = {
 type TextureSlots = Record<TextureChannel, TextureSlot>;
 
 type LoadedTextureSlots = Partial<Record<TextureChannel, Texture | null>>;
+type ModelCanvasPhase = 'loading' | 'ready' | 'error';
+type MaterialSnapshot = {
+  alphaMap: Texture | null;
+  alphaTest: number;
+  bumpMap: Texture | null;
+  bumpScale: number;
+  colorHex: string | null;
+  depthWrite: boolean;
+  map: Texture | null;
+  metalness: number;
+  metalnessMap: Texture | null;
+  opacity: number;
+  roughness: number;
+  roughnessMap: Texture | null;
+  transparent: boolean;
+  transmission: number;
+};
 
 const viewPresetButtons: Array<{ label: string; value: ViewPreset }> = [
   { label: '前', value: 'front' },
@@ -71,7 +87,7 @@ const emptyTextureSlots: TextureSlots = {
 };
 
 class ModelErrorBoundary extends Component<
-  { children: ReactNode; fileName: string },
+  { children: ReactNode; fileName: string; onError?: (fileName: string) => void },
   { hasError: boolean }
 > {
   state = { hasError: false };
@@ -84,6 +100,10 @@ class ModelErrorBoundary extends Component<
     if (previousProps.fileName !== this.props.fileName && this.state.hasError) {
       this.setState({ hasError: false });
     }
+  }
+
+  componentDidCatch() {
+    this.props.onError?.(this.props.fileName);
   }
 
   render() {
@@ -114,12 +134,11 @@ function isExampleModel(model: ModelEntry | undefined) {
 }
 
 function applyTexturesToMaterial(
-  material: Material,
+  material: Material & { userData: Record<string, unknown> },
   textures: LoadedTextureSlots,
   textureTransparencyEnabled: boolean,
 ) {
-  const nextMaterial = material.clone();
-  const standardMaterial = nextMaterial as MeshStandardMaterial;
+  const standardMaterial = material as MeshStandardMaterial & { userData: Record<string, unknown> };
   const hasPbrMapTarget =
     'map' in standardMaterial ||
     'metalnessMap' in standardMaterial ||
@@ -127,12 +146,60 @@ function applyTexturesToMaterial(
     'alphaMap' in standardMaterial;
 
   if (!hasPbrMapTarget) {
-    return nextMaterial;
+    material.needsUpdate = true;
+    return material;
+  }
+
+  const snapshot = standardMaterial.userData.codexOriginalMaterial as MaterialSnapshot | undefined;
+
+  if (snapshot) {
+    standardMaterial.map = snapshot.map;
+    standardMaterial.metalnessMap = snapshot.metalnessMap;
+    standardMaterial.roughnessMap = snapshot.roughnessMap;
+    standardMaterial.bumpMap = snapshot.bumpMap;
+    standardMaterial.bumpScale = snapshot.bumpScale;
+    standardMaterial.alphaMap = snapshot.alphaMap;
+    standardMaterial.alphaTest = snapshot.alphaTest;
+    standardMaterial.transparent = snapshot.transparent;
+    standardMaterial.opacity = snapshot.opacity;
+    standardMaterial.depthWrite = snapshot.depthWrite;
+    standardMaterial.metalness = snapshot.metalness;
+    standardMaterial.roughness = snapshot.roughness;
+    if ('transmission' in standardMaterial) {
+      (
+        standardMaterial as MeshStandardMaterial & {
+          transmission?: number;
+        }
+      ).transmission = snapshot.transmission;
+    }
+    if ('color' in standardMaterial && snapshot.colorHex) {
+      standardMaterial.color?.set(`#${snapshot.colorHex}`);
+    }
   }
 
   const hasBaseColorMap = 'map' in standardMaterial && Boolean(standardMaterial.map);
+  const hasMetalnessMap = 'metalnessMap' in standardMaterial && Boolean(standardMaterial.metalnessMap);
+  const hasRoughnessMap = 'roughnessMap' in standardMaterial && Boolean(standardMaterial.roughnessMap);
+  const hasBumpMap = 'bumpMap' in standardMaterial && Boolean(standardMaterial.bumpMap);
+  const hasAlphaMap = 'alphaMap' in standardMaterial && Boolean(standardMaterial.alphaMap);
+  const transmission =
+    'transmission' in standardMaterial
+      ? Number((standardMaterial as MeshStandardMaterial & { transmission?: number }).transmission ?? 0)
+      : 0;
+  const isTransparentLike =
+    standardMaterial.transparent === true ||
+    (standardMaterial.opacity ?? 1) < 0.999 ||
+    transmission > 0.001;
+  const shouldApplyDesignTextures =
+    hasBaseColorMap && !isTransparentLike && !hasMetalnessMap && !hasRoughnessMap;
 
-  if (textures.color && hasBaseColorMap) {
+  // Preserve glass / transparent parts and only override channels that already exist.
+  if (isTransparentLike) {
+    material.needsUpdate = true;
+    return material;
+  }
+
+  if (textures.color && shouldApplyDesignTextures) {
     standardMaterial.map = textures.color;
 
     if ('color' in standardMaterial) {
@@ -140,47 +207,59 @@ function applyTexturesToMaterial(
     }
   }
 
-  if (textures.metalness && 'metalnessMap' in standardMaterial) {
+  if (textures.metalness && shouldApplyDesignTextures) {
     standardMaterial.metalnessMap = textures.metalness;
     standardMaterial.metalness = 1;
     standardMaterial.roughness = Math.min(standardMaterial.roughness ?? 0.42, 0.42);
   }
 
-  if (textures.bump && 'bumpMap' in standardMaterial) {
+  if (textures.bump && (shouldApplyDesignTextures || hasBumpMap)) {
     standardMaterial.bumpMap = textures.bump;
     standardMaterial.bumpScale = 2;
   }
 
-  if (textures.alpha && 'alphaMap' in standardMaterial) {
+  if (textures.alpha && shouldApplyDesignTextures) {
     standardMaterial.alphaMap = textures.alpha;
     standardMaterial.transparent = true;
     standardMaterial.alphaTest = 0.05;
     standardMaterial.depthWrite = true;
   }
 
-  if (hasBaseColorMap && textureTransparencyEnabled && textures.color?.userData.hasAlpha === true) {
+  if (shouldApplyDesignTextures && textureTransparencyEnabled && textures.color?.userData.hasAlpha === true) {
     standardMaterial.transparent = true;
     standardMaterial.alphaTest = Math.max(standardMaterial.alphaTest ?? 0, 0.05);
     standardMaterial.depthWrite = true;
   }
 
-  nextMaterial.needsUpdate = true;
-  return nextMaterial;
+  material.needsUpdate = true;
+  return material;
 }
 
-function cloneSceneWithTextures(
-  scene: Object3D,
-  textures: LoadedTextureSlots,
-  textureTransparencyEnabled: boolean,
-  shadingPreset: ShadingPreset,
-) {
-  const shouldCloneForTextures = Object.values(textures).some(Boolean);
+function snapshotMaterial(material: Material) {
+  const standardMaterial = material as MeshStandardMaterial & {
+    transmission?: number;
+  };
+
+  return {
+    alphaMap: 'alphaMap' in standardMaterial ? standardMaterial.alphaMap ?? null : null,
+    alphaTest: standardMaterial.alphaTest ?? 0,
+    bumpMap: 'bumpMap' in standardMaterial ? standardMaterial.bumpMap ?? null : null,
+    bumpScale: standardMaterial.bumpScale ?? 1,
+    colorHex: 'color' in standardMaterial ? standardMaterial.color?.getHexString?.() ?? null : null,
+    depthWrite: standardMaterial.depthWrite ?? true,
+    map: 'map' in standardMaterial ? standardMaterial.map ?? null : null,
+    metalness: standardMaterial.metalness ?? 0,
+    metalnessMap: 'metalnessMap' in standardMaterial ? standardMaterial.metalnessMap ?? null : null,
+    opacity: standardMaterial.opacity ?? 1,
+    roughness: standardMaterial.roughness ?? 1,
+    roughnessMap: 'roughnessMap' in standardMaterial ? standardMaterial.roughnessMap ?? null : null,
+    transparent: standardMaterial.transparent ?? false,
+    transmission: Number(standardMaterial.transmission ?? 0),
+  } satisfies MaterialSnapshot;
+}
+
+function cloneSceneForDisplay(scene: Object3D, shadingPreset: ShadingPreset) {
   const shouldCloneForNormals = shadingPreset !== 'source';
-
-  if (!shouldCloneForTextures && !shouldCloneForNormals) {
-    return scene;
-  }
-
   const nextScene = scene.clone(true);
   const creaseAngle = Number(shadingPreset) * (Math.PI / 180);
 
@@ -195,22 +274,42 @@ function cloneSceneWithTextures(
       mesh.geometry.userData.codexOwnedGeometry = true;
     }
 
-    if (shouldCloneForTextures && mesh.material) {
+    if (mesh.material) {
       mesh.material = Array.isArray(mesh.material)
         ? mesh.material.map((material) => {
-            const nextMaterial = applyTexturesToMaterial(material, textures, textureTransparencyEnabled);
+            const nextMaterial = material.clone();
             nextMaterial.userData.codexOwnedMaterial = true;
+            nextMaterial.userData.codexOriginalMaterial = snapshotMaterial(nextMaterial);
             return nextMaterial;
           })
         : (() => {
-            const nextMaterial = applyTexturesToMaterial(mesh.material, textures, textureTransparencyEnabled);
+            const nextMaterial = mesh.material.clone();
             nextMaterial.userData.codexOwnedMaterial = true;
+            nextMaterial.userData.codexOriginalMaterial = snapshotMaterial(nextMaterial);
             return nextMaterial;
           })();
     }
   });
 
   return nextScene;
+}
+
+function applyTexturesToScene(scene: Object3D, textures: LoadedTextureSlots, textureTransparencyEnabled: boolean) {
+  scene.traverse((child) => {
+    const mesh = child as Mesh;
+    if (!mesh.isMesh || !mesh.material) {
+      return;
+    }
+
+    if (Array.isArray(mesh.material)) {
+      mesh.material.forEach((material) => {
+        applyTexturesToMaterial(material as Material & { userData: Record<string, unknown> }, textures, textureTransparencyEnabled);
+      });
+      return;
+    }
+
+    applyTexturesToMaterial(mesh.material as Material & { userData: Record<string, unknown> }, textures, textureTransparencyEnabled);
+  });
 }
 
 function disposeDisplayScene(scene: Object3D) {
@@ -255,89 +354,83 @@ function useUploadedTexture(textureUrl: string | null, channel: TextureChannel, 
     const image = new Image();
 
     image.onload = () => {
-      const canvas = document.createElement('canvas');
-      canvas.width = image.naturalWidth;
-      canvas.height = image.naturalHeight;
+      // Fast path: color previews usually don't need per-pixel preprocessing.
+      if (channel === 'color' && textureTransparencyEnabled) {
+        const nextTexture = new Texture(image);
+        nextTexture.colorSpace = SRGBColorSpace;
+        nextTexture.flipY = false;
+        nextTexture.userData.hasAlpha = true;
+        nextTexture.needsUpdate = true;
+        loadedTexture = nextTexture;
 
-      const context = canvas.getContext('2d', { willReadFrequently: true });
-      if (!context) {
-        const loader = new TextureLoader();
-        loader.load(textureUrl, (nextTexture) => {
-          nextTexture.colorSpace = channel === 'color' ? SRGBColorSpace : nextTexture.colorSpace;
-          nextTexture.flipY = false;
-          nextTexture.userData.hasAlpha = false;
-          nextTexture.needsUpdate = true;
-          loadedTexture = nextTexture;
+        if (cancelled) {
+          nextTexture.dispose();
+          return;
+        }
 
-          if (cancelled) {
-            nextTexture.dispose();
-            return;
-          }
-
-          setTexture(nextTexture);
-        });
+        setTexture(nextTexture);
         return;
       }
 
-      context.drawImage(image, 0, 0);
-      const imageData = context.getImageData(0, 0, canvas.width, canvas.height);
-      let hasAlpha = false;
+      const textureCanvas = document.createElement('canvas');
+      textureCanvas.width = image.naturalWidth;
+      textureCanvas.height = image.naturalHeight;
 
-      for (let index = 3; index < imageData.data.length; index += 4) {
-        if (imageData.data[index] < 255) {
-          hasAlpha = true;
-          break;
+      const textureContext = textureCanvas.getContext('2d', { willReadFrequently: shouldBuildMaskTexture(channel) });
+      if (!textureContext) {
+        const nextTexture = new Texture(image);
+        nextTexture.colorSpace = channel === 'color' ? SRGBColorSpace : nextTexture.colorSpace;
+        nextTexture.flipY = false;
+        nextTexture.userData.hasAlpha = false;
+        nextTexture.needsUpdate = true;
+        loadedTexture = nextTexture;
+
+        if (cancelled) {
+          nextTexture.dispose();
+          return;
         }
+
+        setTexture(nextTexture);
+        return;
       }
 
       let textureSource: HTMLCanvasElement | HTMLImageElement = image;
       let alphaEnabled = false;
 
-      if (hasAlpha || shouldBuildMaskTexture(channel)) {
-        const textureCanvas = document.createElement('canvas');
-        textureCanvas.width = image.naturalWidth;
-        textureCanvas.height = image.naturalHeight;
+      if (channel === 'color' && !textureTransparencyEnabled) {
+        textureContext.fillStyle = '#ffffff';
+        textureContext.fillRect(0, 0, textureCanvas.width, textureCanvas.height);
+        textureContext.drawImage(image, 0, 0);
+        textureSource = textureCanvas;
+      } else if (shouldBuildMaskTexture(channel)) {
+        textureContext.drawImage(image, 0, 0);
+        const textureData = textureContext.getImageData(0, 0, textureCanvas.width, textureCanvas.height);
 
-        const textureContext = textureCanvas.getContext('2d');
-        if (textureContext) {
-          if (hasAlpha && channel === 'color' && !textureTransparencyEnabled) {
-            textureContext.fillStyle = '#ffffff';
-            textureContext.fillRect(0, 0, textureCanvas.width, textureCanvas.height);
-          }
-          textureContext.drawImage(image, 0, 0);
+        for (let index = 0; index < textureData.data.length; index += 4) {
+          const red = textureData.data[index];
+          const green = textureData.data[index + 1];
+          const blue = textureData.data[index + 2];
+          const alpha = textureData.data[index + 3];
+          const luminance = Math.round(red * 0.2126 + green * 0.7152 + blue * 0.0722);
+          const isTransparentPixel = alpha === 0;
+          let maskValue = luminance;
 
-          if (shouldBuildMaskTexture(channel)) {
-            const textureData = textureContext.getImageData(0, 0, textureCanvas.width, textureCanvas.height);
-
-            for (let index = 0; index < textureData.data.length; index += 4) {
-              const red = textureData.data[index];
-              const green = textureData.data[index + 1];
-              const blue = textureData.data[index + 2];
-              const alpha = textureData.data[index + 3];
-              const luminance = Math.round(red * 0.2126 + green * 0.7152 + blue * 0.0722);
-              const isTransparentPixel = alpha === 0;
-              let maskValue = luminance;
-
-              if (channel === 'metalness' || channel === 'bump') {
-                maskValue = isTransparentPixel ? 0 : 255 - luminance;
-              }
-
-              if (channel === 'alpha') {
-                maskValue = isTransparentPixel ? 255 : luminance;
-              }
-
-              textureData.data[index] = maskValue;
-              textureData.data[index + 1] = maskValue;
-              textureData.data[index + 2] = maskValue;
-              textureData.data[index + 3] = 255;
-            }
-
-            textureContext.putImageData(textureData, 0, 0);
+          if (channel === 'metalness' || channel === 'bump') {
+            maskValue = isTransparentPixel ? 0 : 255 - luminance;
           }
 
-          textureSource = textureCanvas;
-          alphaEnabled = channel === 'color' && hasAlpha && textureTransparencyEnabled;
+          if (channel === 'alpha') {
+            maskValue = isTransparentPixel ? 255 : luminance;
+          }
+
+          textureData.data[index] = maskValue;
+          textureData.data[index + 1] = maskValue;
+          textureData.data[index + 2] = maskValue;
+          textureData.data[index + 3] = 255;
         }
+
+        textureContext.putImageData(textureData, 0, 0);
+        textureSource = textureCanvas;
       }
 
       const nextTexture =
@@ -375,12 +468,14 @@ function ModelAsset({
   textureSlots,
   textureTransparencyEnabled,
   shadingPreset,
+  onReady,
 }: {
   model: ModelEntry;
   selectedUvImagePath?: string;
   textureSlots: TextureSlots;
   textureTransparencyEnabled: boolean;
   shadingPreset: ShadingPreset;
+  onReady?: (fileName: string) => void;
 }) {
   const gltf = useGLTF(model.path);
   const colorTextureUrl = textureSlots.color.url ?? selectedUvImagePath ?? null;
@@ -397,18 +492,19 @@ function ModelAsset({
     }),
     [alphaTexture, bumpTexture, colorTexture, metalnessTexture],
   );
-  const scene = useMemo(
-    () => cloneSceneWithTextures(gltf.scene, uploadedTextures, textureTransparencyEnabled, shadingPreset),
-    [gltf.scene, shadingPreset, textureTransparencyEnabled, uploadedTextures],
-  );
+  const scene = useMemo(() => cloneSceneForDisplay(gltf.scene, shadingPreset), [gltf.scene, shadingPreset]);
 
   useEffect(() => {
-    if (scene === gltf.scene) {
-      return;
-    }
-
     return () => disposeDisplayScene(scene);
-  }, [gltf.scene, scene]);
+  }, [scene]);
+
+  useEffect(() => {
+    applyTexturesToScene(scene, uploadedTextures, textureTransparencyEnabled);
+  }, [scene, textureTransparencyEnabled, uploadedTextures]);
+
+  useEffect(() => {
+    onReady?.(model.fileName);
+  }, [model.fileName, onReady, scene]);
 
   return (
     <group name="active-model-root">
@@ -438,6 +534,8 @@ function Scene({
   textureSlots,
   textureTransparencyEnabled,
   shadingPreset,
+  onModelReady,
+  onModelError,
 }: {
   activeModel: ModelEntry;
   gridVisible: boolean;
@@ -447,6 +545,8 @@ function Scene({
   textureSlots: TextureSlots;
   textureTransparencyEnabled: boolean;
   shadingPreset: ShadingPreset;
+  onModelReady?: (fileName: string) => void;
+  onModelError?: (fileName: string) => void;
 }) {
   const { camera } = useThree();
 
@@ -479,22 +579,16 @@ function Scene({
         />
       ) : null}
 
-      <ModelErrorBoundary fileName={activeModel.fileName}>
+      <ModelErrorBoundary fileName={activeModel.fileName} onError={onModelError}>
         <Bounds clip margin={1.35}>
-          <Suspense
-            fallback={
-              <Html center className="canvas-message">
-                <Loader2 className="spin" size={22} aria-hidden="true" />
-                Loading model
-              </Html>
-          }
-        >
+          <Suspense fallback={null}>
             <ModelAsset
               model={activeModel}
               selectedUvImagePath={selectedUvImagePath}
               textureSlots={textureSlots}
               textureTransparencyEnabled={textureTransparencyEnabled}
               shadingPreset={shadingPreset}
+              onReady={onModelReady}
             />
             <CameraResetter activeModelId={activeModel.id} resetToken={resetToken} />
           </Suspense>
@@ -636,6 +730,7 @@ export function ModelViewer({ models }: ModelViewerProps) {
   const [viewPresetToken, setViewPresetToken] = useState(0);
   const [dragActiveChannel, setDragActiveChannel] = useState<TextureChannel | null>(null);
   const [selectedUvPath, setSelectedUvPath] = useState<string | null>(null);
+  const [canvasPhase, setCanvasPhase] = useState<ModelCanvasPhase>('loading');
   const workbenchRef = useRef<HTMLDivElement | null>(null);
   const textureSlotsRef = useRef(textureSlots);
   const textureInputRefs = useRef<Record<TextureChannel, HTMLInputElement | null>>({
@@ -655,6 +750,25 @@ export function ModelViewer({ models }: ModelViewerProps) {
     availableUvImages.find((uvImage) => uvImage.path === selectedUvPath) ??
     availableUvImages.find((uvImage) => uvImage.path === activeModel?.uvImagePath) ??
     availableUvImages[0];
+
+  useEffect(() => {
+    setCanvasPhase('loading');
+  }, [activeModel?.id]);
+
+  const [slowLoading, setSlowLoading] = useState(false);
+
+  useEffect(() => {
+    if (canvasPhase !== 'loading') {
+      setSlowLoading(false);
+      return;
+    }
+
+    const timer = window.setTimeout(() => {
+      setSlowLoading(true);
+    }, 2400);
+
+    return () => window.clearTimeout(timer);
+  }, [canvasPhase]);
 
   useEffect(() => {
     const onHashChange = () => {
@@ -813,6 +927,7 @@ export function ModelViewer({ models }: ModelViewerProps) {
 
   const activeTextureSlot = textureSlots[activeTextureChannel];
   const uploadedTextureCount = Object.values(textureSlots).filter((textureSlot) => textureSlot.url).length;
+  const showCanvasOverlay = canvasPhase !== 'ready';
 
   return (
     <div className="viewer-panel">
@@ -885,6 +1000,36 @@ export function ModelViewer({ models }: ModelViewerProps) {
         style={{ '--viewer-split': `${viewerSplit}%` } as React.CSSProperties}
       >
         <div className="canvas-wrap">
+          {showCanvasOverlay ? (
+            <div
+              className={`canvas-overlay ${canvasPhase === 'error' ? 'canvas-overlay-error' : ''}`}
+              role={canvasPhase === 'error' ? 'alert' : 'status'}
+            >
+              {canvasPhase === 'loading' ? (
+                <>
+                  <div className="canvas-overlay-icon">
+                    <Loader2 className="spin" size={22} aria-hidden="true" />
+                  </div>
+                  <div className="canvas-overlay-copy">
+                    <strong>正在加载 3D 模型</strong>
+                    <span>{activeModel.fileName}</span>
+                    <small>{slowLoading ? '加载较慢时，通常是模型体积较大或局域网传输较慢。' : '页面已打开，模型文件仍在单独加载。'}</small>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="canvas-overlay-icon">
+                    <TriangleAlert size={22} aria-hidden="true" />
+                  </div>
+                  <div className="canvas-overlay-copy">
+                    <strong>模型没有加载成功</strong>
+                    <span>{activeModel.fileName}</span>
+                    <small>请刷新页面重试，或先切换到示例模型确认当前电脑是否能正常显示 3D。</small>
+                  </div>
+                </>
+              )}
+            </div>
+          ) : null}
           {isExampleModel(activeModel) ? (
             <div className="viewer-note-card" role="note">
               <strong>示例模型贴图 / UV</strong>
@@ -908,6 +1053,16 @@ export function ModelViewer({ models }: ModelViewerProps) {
               textureSlots={textureSlots}
               textureTransparencyEnabled={textureTransparencyEnabled}
               shadingPreset={shadingPreset}
+              onModelReady={(fileName) => {
+                if (fileName === activeModel.fileName) {
+                  setCanvasPhase('ready');
+                }
+              }}
+              onModelError={(fileName) => {
+                if (fileName === activeModel.fileName) {
+                  setCanvasPhase('error');
+                }
+              }}
             />
             <ViewPresetController
               activeModel={activeModel}

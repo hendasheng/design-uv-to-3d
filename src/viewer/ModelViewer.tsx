@@ -5,6 +5,7 @@ import type { ChangeEvent, DragEvent, PointerEvent } from 'react';
 import type { ReactNode } from 'react';
 import { Eye, Grid3X3, ImageIcon, Loader2, RotateCcw, TriangleAlert, Upload, X } from 'lucide-react';
 import {
+  BufferGeometry,
   Box3,
   CanvasTexture,
   Material,
@@ -38,6 +39,9 @@ type TextureSlots = Record<TextureChannel, TextureSlot>;
 
 type LoadedTextureSlots = Partial<Record<TextureChannel, Texture | null>>;
 type ModelCanvasPhase = 'loading' | 'ready' | 'error';
+type ModelLoadingStep = 'model' | 'uv';
+type UvWireframeSegments = number[];
+type FaceNormal = { normalX: number; normalY: number; normalZ: number };
 type MaterialSnapshot = {
   alphaMap: Texture | null;
   alphaTest: number;
@@ -86,6 +90,8 @@ const emptyTextureSlots: TextureSlots = {
   alpha: { name: null, url: null },
 };
 
+const uvWireframeSegmentsCache = new Map<string, UvWireframeSegments>();
+
 class ModelErrorBoundary extends Component<
   { children: ReactNode; fileName: string; onError?: (fileName: string) => void },
   { hasError: boolean }
@@ -131,6 +137,178 @@ function getInitialModel(models: ModelEntry[]) {
 
 function isExampleModel(model: ModelEntry | undefined) {
   return model?.groupName === '示例' || model?.groupName === '示例模型';
+}
+
+function buildUvWireframeSegments(scene: Object3D) {
+  const topologyEdges = new Map<
+    string,
+    {
+      faces: FaceNormal[];
+      uvEdges: Map<string, { ax: number; ay: number; bx: number; by: number; count: number }>;
+    }
+  >();
+
+  scene.traverse((child) => {
+    const mesh = child as Mesh;
+    if (!mesh.isMesh || !mesh.geometry) {
+      return;
+    }
+
+    const geometry = mesh.geometry as BufferGeometry;
+    const uv = geometry.getAttribute('uv');
+
+    if (!uv) {
+      return;
+    }
+
+    const index = geometry.getIndex();
+
+    const position = geometry.getAttribute('position');
+    const addFaceNormal = (a: number, b: number, c: number) => {
+      const ax = position.getX(a);
+      const ay = position.getY(a);
+      const az = position.getZ(a);
+      const bx = position.getX(b);
+      const by = position.getY(b);
+      const bz = position.getZ(b);
+      const cx = position.getX(c);
+      const cy = position.getY(c);
+      const cz = position.getZ(c);
+
+      const abx = bx - ax;
+      const aby = by - ay;
+      const abz = bz - az;
+      const acx = cx - ax;
+      const acy = cy - ay;
+      const acz = cz - az;
+      const nx = aby * acz - abz * acy;
+      const ny = abz * acx - abx * acz;
+      const nz = abx * acy - aby * acx;
+      const length = Math.hypot(nx, ny, nz) || 1;
+
+      return {
+        normalX: nx / length,
+        normalY: ny / length,
+        normalZ: nz / length,
+      };
+    };
+
+    const addEdge = (
+      a: number,
+      b: number,
+      ax: number,
+      ay: number,
+      bx: number,
+      by: number,
+      faceNormal: FaceNormal,
+    ) => {
+      const precision = 100000;
+      const apx = Math.round(position.getX(a) * precision);
+      const apy = Math.round(position.getY(a) * precision);
+      const apz = Math.round(position.getZ(a) * precision);
+      const bpx = Math.round(position.getX(b) * precision);
+      const bpy = Math.round(position.getY(b) * precision);
+      const bpz = Math.round(position.getZ(b) * precision);
+      const topoA = `${apx},${apy},${apz}`;
+      const topoB = `${bpx},${bpy},${bpz}`;
+      const topologyKey = topoA < topoB ? `${topoA}|${topoB}` : `${topoB}|${topoA}`;
+
+      const ua = `${Math.round(ax * precision)},${Math.round(ay * precision)}`;
+      const ub = `${Math.round(bx * precision)},${Math.round(by * precision)}`;
+      const uvKey = ua < ub ? `${ua}|${ub}` : `${ub}|${ua}`;
+
+      const topologyEdge: {
+        faces: FaceNormal[];
+        uvEdges: Map<string, { ax: number; ay: number; bx: number; by: number; count: number }>;
+      } = topologyEdges.get(topologyKey) ?? {
+        faces: [],
+        uvEdges: new Map(),
+      };
+      topologyEdges.set(topologyKey, topologyEdge);
+      topologyEdge.faces.push(faceNormal);
+
+      const current = topologyEdge.uvEdges.get(uvKey);
+      if (current) {
+        current.count += 1;
+        return;
+      }
+
+      topologyEdge.uvEdges.set(uvKey, { ax, ay, bx, by, count: 1 });
+    };
+
+    const appendTriangle = (a: number, b: number, c: number) => {
+      const faceNormal = addFaceNormal(a, b, c);
+      const ax = uv.getX(a);
+      const ay = 1 - uv.getY(a);
+      const bx = uv.getX(b);
+      const by = 1 - uv.getY(b);
+      const cx = uv.getX(c);
+      const cy = 1 - uv.getY(c);
+
+      addEdge(a, b, ax, ay, bx, by, faceNormal);
+      addEdge(b, c, bx, by, cx, cy, faceNormal);
+      addEdge(c, a, cx, cy, ax, ay, faceNormal);
+    };
+
+    if (index) {
+      for (let triangle = 0; triangle < index.count; triangle += 3) {
+        appendTriangle(index.getX(triangle), index.getX(triangle + 1), index.getX(triangle + 2));
+      }
+      return;
+    }
+
+    for (let triangle = 0; triangle < uv.count; triangle += 3) {
+      appendTriangle(triangle, triangle + 1, triangle + 2);
+    }
+  });
+
+  const segments: number[] = [];
+  topologyEdges.forEach(({ faces, uvEdges }) => {
+    if (uvEdges.size > 1) {
+      uvEdges.forEach((edge) => {
+        segments.push(edge.ax, edge.ay, edge.bx, edge.by);
+      });
+      return;
+    }
+
+    const shouldKeepByBoundary = faces.length === 1;
+    const shouldKeepByAngle =
+      faces.length >= 2 &&
+      (() => {
+        const first = faces[0];
+        const second = faces[1];
+        const dot = first.normalX * second.normalX + first.normalY * second.normalY + first.normalZ * second.normalZ;
+        return dot < 0.995;
+      })();
+
+    uvEdges.forEach((edge) => {
+      if (shouldKeepByBoundary || shouldKeepByAngle || edge.count === 1) {
+        segments.push(edge.ax, edge.ay, edge.bx, edge.by);
+      }
+    });
+  });
+
+  return segments;
+}
+
+function scheduleIdleTask(task: () => void) {
+  const requestIdle =
+    'requestIdleCallback' in window
+      ? window.requestIdleCallback.bind(window)
+      : (callback: IdleRequestCallback) => window.setTimeout(() => callback({ didTimeout: false, timeRemaining: () => 0 }), 16);
+
+  return requestIdle(() => {
+    task();
+  });
+}
+
+function cancelIdleTask(handle: number) {
+  if ('cancelIdleCallback' in window) {
+    window.cancelIdleCallback(handle);
+    return;
+  }
+
+  globalThis.clearTimeout(handle);
 }
 
 function applyTexturesToMaterial(
@@ -462,6 +640,62 @@ function useUploadedTexture(textureUrl: string | null, channel: TextureChannel, 
   return texture;
 }
 
+function UvWireframeOverlay({
+  segments,
+  color,
+}: {
+  segments: UvWireframeSegments;
+  color: string;
+}) {
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) {
+      return;
+    }
+
+    const width = canvas.clientWidth;
+    const height = canvas.clientHeight;
+    if (!width || !height) {
+      return;
+    }
+
+    const dpr = Math.max(window.devicePixelRatio || 1, 1);
+    canvas.width = Math.round(width * dpr);
+    canvas.height = Math.round(height * dpr);
+
+    const context = canvas.getContext('2d');
+    if (!context) {
+      return;
+    }
+
+    context.setTransform(dpr, 0, 0, dpr, 0, 0);
+    context.clearRect(0, 0, width, height);
+
+    if (segments.length === 0) {
+      return;
+    }
+
+    context.lineWidth = 1.4;
+    context.strokeStyle = color;
+    context.beginPath();
+
+    for (let index = 0; index < segments.length; index += 4) {
+      const startX = segments[index] * width;
+      const startY = segments[index + 1] * height;
+      const endX = segments[index + 2] * width;
+      const endY = segments[index + 3] * height;
+      context.moveTo(startX, startY);
+      context.lineTo(endX, endY);
+    }
+
+    context.stroke();
+  }, [color, segments]);
+
+  return <canvas ref={canvasRef} className="uv-wireframe-overlay" aria-hidden="true" />;
+}
+
 function ModelAsset({
   model,
   selectedUvImagePath,
@@ -469,6 +703,8 @@ function ModelAsset({
   textureTransparencyEnabled,
   shadingPreset,
   onReady,
+  onUvSegmentsReady,
+  uvWireframeEnabled,
 }: {
   model: ModelEntry;
   selectedUvImagePath?: string;
@@ -476,6 +712,8 @@ function ModelAsset({
   textureTransparencyEnabled: boolean;
   shadingPreset: ShadingPreset;
   onReady?: (fileName: string) => void;
+  onUvSegmentsReady?: (fileName: string, segments: UvWireframeSegments) => void;
+  uvWireframeEnabled: boolean;
 }) {
   const gltf = useGLTF(model.path);
   const colorTextureUrl = textureSlots.color.url ?? selectedUvImagePath ?? null;
@@ -505,6 +743,33 @@ function ModelAsset({
   useEffect(() => {
     onReady?.(model.fileName);
   }, [model.fileName, onReady, scene]);
+
+  useEffect(() => {
+    if (!uvWireframeEnabled) {
+      return;
+    }
+
+    const cachedSegments = uvWireframeSegmentsCache.get(model.path);
+    if (cachedSegments) {
+      onUvSegmentsReady?.(model.fileName, cachedSegments);
+      return;
+    }
+
+    let cancelled = false;
+    const idleHandle = scheduleIdleTask(() => {
+      const segments = buildUvWireframeSegments(gltf.scene);
+      uvWireframeSegmentsCache.set(model.path, segments);
+
+      if (!cancelled) {
+        onUvSegmentsReady?.(model.fileName, segments);
+      }
+    });
+
+    return () => {
+      cancelled = true;
+      cancelIdleTask(idleHandle);
+    };
+  }, [gltf.scene, model.fileName, model.path, onUvSegmentsReady, uvWireframeEnabled]);
 
   return (
     <group name="active-model-root">
@@ -536,6 +801,8 @@ function Scene({
   shadingPreset,
   onModelReady,
   onModelError,
+  onUvSegmentsReady,
+  uvWireframeEnabled,
 }: {
   activeModel: ModelEntry;
   gridVisible: boolean;
@@ -547,6 +814,8 @@ function Scene({
   shadingPreset: ShadingPreset;
   onModelReady?: (fileName: string) => void;
   onModelError?: (fileName: string) => void;
+  onUvSegmentsReady?: (fileName: string, segments: UvWireframeSegments) => void;
+  uvWireframeEnabled: boolean;
 }) {
   const { camera } = useThree();
 
@@ -589,6 +858,8 @@ function Scene({
               textureTransparencyEnabled={textureTransparencyEnabled}
               shadingPreset={shadingPreset}
               onReady={onModelReady}
+              onUvSegmentsReady={onUvSegmentsReady}
+              uvWireframeEnabled={uvWireframeEnabled}
             />
             <CameraResetter activeModelId={activeModel.id} resetToken={resetToken} />
           </Suspense>
@@ -731,6 +1002,12 @@ export function ModelViewer({ models }: ModelViewerProps) {
   const [dragActiveChannel, setDragActiveChannel] = useState<TextureChannel | null>(null);
   const [selectedUvPath, setSelectedUvPath] = useState<string | null>(null);
   const [canvasPhase, setCanvasPhase] = useState<ModelCanvasPhase>('loading');
+  const [loadingStep, setLoadingStep] = useState<ModelLoadingStep>('model');
+  const [uvWireframeVisible, setUvWireframeVisible] = useState(true);
+  const [uvWireframeSegments, setUvWireframeSegments] = useState<UvWireframeSegments>([]);
+  const [uvWireframeColor, setUvWireframeColor] = useState('#ffffff');
+  const [modelSceneReady, setModelSceneReady] = useState(false);
+  const [uvWireframeReady, setUvWireframeReady] = useState(false);
   const workbenchRef = useRef<HTMLDivElement | null>(null);
   const textureSlotsRef = useRef(textureSlots);
   const textureInputRefs = useRef<Record<TextureChannel, HTMLInputElement | null>>({
@@ -753,7 +1030,47 @@ export function ModelViewer({ models }: ModelViewerProps) {
 
   useEffect(() => {
     setCanvasPhase('loading');
-  }, [activeModel?.id]);
+    setLoadingStep('model');
+    setModelSceneReady(false);
+    const cachedSegments = uvWireframeSegmentsCache.get(activeModel?.path ?? '') ?? [];
+    setUvWireframeSegments(cachedSegments);
+    setUvWireframeReady(!uvWireframeVisible || cachedSegments.length > 0);
+  }, [activeModel?.id, activeModel?.path]);
+
+  useEffect(() => {
+    if (!uvWireframeVisible) {
+      setUvWireframeReady(true);
+      return;
+    }
+
+    const cachedSegments = uvWireframeSegmentsCache.get(activeModel?.path ?? '') ?? [];
+    setUvWireframeSegments(cachedSegments);
+    setUvWireframeReady(cachedSegments.length > 0);
+    if (modelSceneReady && cachedSegments.length === 0) {
+      setCanvasPhase('loading');
+      setLoadingStep('uv');
+    }
+  }, [activeModel?.path, modelSceneReady, uvWireframeVisible]);
+
+  useEffect(() => {
+    if (canvasPhase === 'error') {
+      return;
+    }
+
+    if (!modelSceneReady) {
+      setCanvasPhase('loading');
+      setLoadingStep('model');
+      return;
+    }
+
+    if (uvWireframeVisible && !uvWireframeReady) {
+      setCanvasPhase('loading');
+      setLoadingStep('uv');
+      return;
+    }
+
+    setCanvasPhase('ready');
+  }, [canvasPhase, modelSceneReady, uvWireframeReady, uvWireframeVisible]);
 
   const [slowLoading, setSlowLoading] = useState(false);
 
@@ -1008,12 +1325,20 @@ export function ModelViewer({ models }: ModelViewerProps) {
               {canvasPhase === 'loading' ? (
                 <>
                   <div className="canvas-overlay-icon">
-                    <Loader2 className="spin" size={22} aria-hidden="true" />
+                    <span className="canvas-spinner" aria-hidden="true" />
                   </div>
                   <div className="canvas-overlay-copy">
-                    <strong>正在加载 3D 模型</strong>
+                    <strong>{loadingStep === 'model' ? '正在加载 3D 模型' : '正在生成 UV 线框'}</strong>
                     <span>{activeModel.fileName}</span>
-                    <small>{slowLoading ? '加载较慢时，通常是模型体积较大或局域网传输较慢。' : '页面已打开，模型文件仍在单独加载。'}</small>
+                    <small>
+                      {loadingStep === 'model'
+                        ? slowLoading
+                          ? '加载较慢时，通常是模型体积较大或局域网传输较慢。'
+                          : '页面已打开，模型文件仍在单独加载。'
+                        : slowLoading
+                          ? 'UV 线框会遍历模型拓扑，大模型首次生成会更慢。'
+                          : '模型已加载完成，正在计算 UV 线框。'}
+                    </small>
                   </div>
                 </>
               ) : (
@@ -1053,14 +1378,21 @@ export function ModelViewer({ models }: ModelViewerProps) {
               textureSlots={textureSlots}
               textureTransparencyEnabled={textureTransparencyEnabled}
               shadingPreset={shadingPreset}
+              uvWireframeEnabled={uvWireframeVisible}
               onModelReady={(fileName) => {
                 if (fileName === activeModel.fileName) {
-                  setCanvasPhase('ready');
+                  setModelSceneReady(true);
                 }
               }}
               onModelError={(fileName) => {
                 if (fileName === activeModel.fileName) {
                   setCanvasPhase('error');
+                }
+              }}
+              onUvSegmentsReady={(fileName, segments) => {
+                if (fileName === activeModel.fileName) {
+                  setUvWireframeSegments(segments);
+                  setUvWireframeReady(true);
                 }
               }}
             />
@@ -1164,28 +1496,64 @@ export function ModelViewer({ models }: ModelViewerProps) {
 
           {availableUvImages.length > 0 ? (
             <div className="uv-switcher">
-              <label htmlFor="uv-reference-select">UV 图</label>
-              <select
-                id="uv-reference-select"
-                value={selectedUvImage?.path ?? ''}
-                onChange={(event) => setSelectedUvPath(event.currentTarget.value)}
-              >
-                {availableUvImages.map((uvImage) => (
-                  <option key={uvImage.path} value={uvImage.path}>
-                    {uvImage.name}
-                  </option>
-                ))}
-              </select>
+              <div className="uv-switcher-group">
+                <label htmlFor="uv-reference-select">UV 图</label>
+                <select
+                  id="uv-reference-select"
+                  value={selectedUvImage?.path ?? ''}
+                  onChange={(event) => setSelectedUvPath(event.currentTarget.value)}
+                >
+                  {availableUvImages.map((uvImage) => (
+                    <option key={uvImage.path} value={uvImage.path}>
+                      {uvImage.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="uv-wireframe-controls">
+                <div className="uv-switcher-group">
+                  <span className="uv-wireframe-label">UV 线框</span>
+                  <button
+                    className="uv-wireframe-toggle"
+                    type="button"
+                    aria-pressed={uvWireframeVisible}
+                    onClick={() => setUvWireframeVisible((visible) => !visible)}
+                  >
+                    {uvWireframeVisible ? 'UV 开启' : 'UV 关闭'}
+                  </button>
+                </div>
+
+                <label className="uv-color-picker" htmlFor="uv-wireframe-color-input">
+                  <span>颜色</span>
+                  <input
+                    id="uv-wireframe-color-input"
+                    type="color"
+                    value={uvWireframeColor}
+                    onChange={(event) => setUvWireframeColor(event.currentTarget.value)}
+                  />
+                </label>
+              </div>
             </div>
           ) : null}
 
           {activeTextureSlot.url ? (
             <div className="uv-image-frame">
-              <img src={activeTextureSlot.url} alt={`${activeTextureSlot.name ?? 'Uploaded'} texture preview`} />
+              <div className="uv-image-stage">
+                <img src={activeTextureSlot.url} alt={`${activeTextureSlot.name ?? 'Uploaded'} texture preview`} />
+                {uvWireframeVisible ? (
+                  <UvWireframeOverlay segments={uvWireframeSegments} color={uvWireframeColor} />
+                ) : null}
+              </div>
             </div>
           ) : selectedUvImage ? (
             <div className="uv-image-frame">
-              <img src={selectedUvImage.path} alt={`${selectedUvImage.name} UV layout`} />
+              <div className="uv-image-stage">
+                <img src={selectedUvImage.path} alt={`${selectedUvImage.name} UV layout`} />
+                {uvWireframeVisible ? (
+                  <UvWireframeOverlay segments={uvWireframeSegments} color={uvWireframeColor} />
+                ) : null}
+              </div>
             </div>
           ) : (
             <div className="uv-empty">

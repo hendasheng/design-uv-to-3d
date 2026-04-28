@@ -420,6 +420,16 @@ a {
   background: rgba(255, 255, 255, 0.72);
 }
 
+.canvas-spinner {
+  display: block;
+  width: 22px;
+  height: 22px;
+  border: 2px solid rgba(52, 47, 39, 0.16);
+  border-top-color: #7a5b28;
+  border-radius: 999px;
+  animation: spin 0.75s linear infinite;
+}
+
 .canvas-overlay-copy {
   display: grid;
   gap: 4px;
@@ -590,26 +600,44 @@ a {
   outline: none;
 }
 
-.uv-switcher {
+.uv-switcher,
+.uv-wireframe-controls {
   display: flex;
   align-items: center;
-  justify-content: flex-start;
+  justify-content: space-between;
   gap: 8px;
+  flex-wrap: wrap;
+  min-width: 0;
   min-height: 0;
-  padding: 8px 14px 4px;
+}
+
+.uv-wireframe-controls {
+  justify-content: flex-end;
+}
+
+.uv-switcher {
+  padding: 10px 14px 8px;
   border-bottom: 1px solid rgba(39, 35, 29, 0.1);
   background: rgba(242, 239, 231, 0.72);
 }
 
+.uv-switcher-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
 .uv-switcher label {
+  flex: 0 0 auto;
   color: #5b5348;
   font-size: 12px;
   font-weight: 800;
 }
 
 .uv-switcher select {
-  width: min(240px, 100%);
-  height: 28px;
+  width: min(180px, calc(100vw - 180px));
+  height: 30px;
   padding: 0 24px 0 9px;
   color: #342f27;
   font: inherit;
@@ -620,9 +648,97 @@ a {
   background: #fffdf7;
 }
 
+.uv-switcher-group:last-of-type select {
+  width: 92px;
+}
+
 .uv-switcher select:focus-visible {
   border-color: #b38437;
   outline: none;
+}
+
+.uv-wireframe-label {
+  color: #5b5348;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.uv-wireframe-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 30px;
+  min-width: 88px;
+  padding: 0 11px;
+  color: #6c655b;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 800;
+  white-space: nowrap;
+  border: 1px solid rgba(39, 35, 29, 0.16);
+  border-radius: 8px;
+  background: rgba(255, 253, 247, 0.72);
+  cursor: pointer;
+  transition:
+    background-color 140ms ease,
+    border-color 140ms ease,
+    color 140ms ease;
+}
+
+.uv-wireframe-toggle::before {
+  width: 8px;
+  height: 8px;
+  content: "";
+  border-radius: 999px;
+  background: #b7afa1;
+}
+
+.uv-wireframe-toggle:hover,
+.uv-wireframe-toggle:focus-visible {
+  color: #342f27;
+  border-color: #b38437;
+  background: #f5e5bf;
+  outline: none;
+}
+
+.uv-wireframe-toggle[aria-pressed="true"] {
+  color: #2f281e;
+  border-color: #b38437;
+  background: #efd49b;
+  box-shadow: inset 0 0 0 1px rgba(122, 91, 40, 0.12);
+}
+
+.uv-wireframe-toggle[aria-pressed="true"]::before {
+  background: #8d5d19;
+}
+
+.uv-color-picker {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: #5b5348;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.uv-color-picker input[type="color"] {
+  width: 34px;
+  height: 30px;
+  padding: 2px;
+  border: 1px solid rgba(39, 35, 29, 0.16);
+  border-radius: 8px;
+  background: #fffdf7;
+  cursor: pointer;
+}
+
+.uv-color-picker input[type="color"]::-webkit-color-swatch-wrapper {
+  padding: 0;
+}
+
+.uv-color-picker input[type="color"]::-webkit-color-swatch {
+  border: 0;
+  border-radius: 5px;
 }
 
 .texture-actions {
@@ -812,9 +928,15 @@ a {
   overflow: auto;
 }
 
+.uv-image-stage {
+  position: relative;
+  width: min(100%, 620px);
+  max-height: 100%;
+}
+
 .uv-image-frame img {
   display: block;
-  width: min(100%, 620px);
+  width: 100%;
   height: auto;
   max-height: 100%;
   object-fit: contain;
@@ -832,6 +954,24 @@ a {
     -10px 0;
   background-size: 20px 20px;
   box-shadow: 0 12px 30px rgba(39, 35, 29, 0.14);
+}
+
+.uv-wireframe-overlay {
+  position: absolute;
+  inset: 1px;
+  z-index: 1;
+  width: calc(100% - 2px);
+  height: calc(100% - 2px);
+  pointer-events: none;
+  transform: scale(1, -1);
+  transform-origin: center;
+}
+
+.uv-wireframe-overlay path {
+  fill: none;
+  stroke: rgba(176, 46, 24, 0.98);
+  stroke-width: 0.0026;
+  vector-effect: non-scaling-stroke;
 }
 
 .uv-empty {

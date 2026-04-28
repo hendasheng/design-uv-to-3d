@@ -1123,7 +1123,7 @@ export function ModelViewer({ models }: ModelViewerProps) {
     return (
       <div className="viewer-empty">
         <TriangleAlert size={24} aria-hidden="true" />
-        No models configured.
+        未配置模型。
       </div>
     );
   }
@@ -1290,7 +1290,7 @@ export function ModelViewer({ models }: ModelViewerProps) {
           </label>
           <button
             className="icon-button"
-            title={gridVisible ? 'Hide grid' : 'Show grid'}
+            title={gridVisible ? '隐藏网格' : '显示网格'}
             type="button"
             aria-pressed={gridVisible}
             onClick={() => setGridVisible((visible) => !visible)}
@@ -1299,7 +1299,7 @@ export function ModelViewer({ models }: ModelViewerProps) {
           </button>
           <button
             className="icon-button"
-            title="Reset view"
+            title="重置视角"
             type="button"
             onClick={() => {
               controlsRef.current?.reset();
@@ -1415,14 +1415,9 @@ export function ModelViewer({ models }: ModelViewerProps) {
         <aside className="uv-panel" aria-label="UV reference image">
           <div className="uv-panel-header">
             <div>
-              <span className="eyebrow">UV Reference</span>
-              <h3>Texture layout</h3>
+              <span className="eyebrow">UV 参考</span>
+              <h3>贴图布局</h3>
             </div>
-            {selectedUvImage ? (
-              <a className="uv-open-link" href={selectedUvImage.path} target="_blank" rel="noreferrer">
-                UV
-              </a>
-            ) : null}
           </div>
 
           <div className="texture-actions" aria-label="Texture channel uploads">
@@ -1558,7 +1553,7 @@ export function ModelViewer({ models }: ModelViewerProps) {
           ) : (
             <div className="uv-empty">
               <ImageIcon size={24} aria-hidden="true" />
-              No UV image linked.
+              未关联 UV 图片。
             </div>
           )}
 
@@ -1569,17 +1564,17 @@ export function ModelViewer({ models }: ModelViewerProps) {
                 ? `${textureChannelOptions.find((option) => option.value === activeTextureChannel)?.label}: ${
                     activeTextureSlot.name
                   }`
-                : selectedUvImage?.fileName ?? 'No UV file'}
+                : selectedUvImage?.fileName ?? '没有 UV 文件'}
             </span>
           </div>
         </aside>
       </div>
 
       <div className="viewer-status">
-        <span>Left drag rotate</span>
-        <span>Wheel zoom</span>
-        <span>Right drag pan</span>
-        <span>{uploadedTextureCount} texture maps</span>
+        <span>左键拖动旋转</span>
+        <span>滚轮缩放</span>
+        <span>右键拖动平移</span>
+        <span>{uploadedTextureCount} 张贴图</span>
       </div>
     </div>
   );

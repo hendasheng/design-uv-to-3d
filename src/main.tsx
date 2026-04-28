@@ -21,7 +21,7 @@ function App() {
           </div>
           <div>
             <h1>模型预览</h1>
-            <p>{modelCatalog.length} built-in slots</p>
+            <p>{modelCatalog.length} 个模型入口</p>
           </div>
         </div>
 
@@ -59,13 +59,13 @@ function App() {
 
       <section className="viewer-shell" aria-label="3D model viewer">
         <div className="viewer-topbar">
-          <div>
-            <span className="eyebrow">Orbit / Pan / Zoom</span>
+        <div>
+            <span className="eyebrow">旋转 / 平移 / 缩放</span>
             <h2>查看 / 定位 UV 位置</h2>
           </div>
           <div className="control-hint">
             <RotateCcw size={15} aria-hidden="true" />
-            <span>Use reset to frame the active model</span>
+            <span>重置后会重新对准当前模型</span>
           </div>
         </div>
         <ModelViewer models={modelCatalog} />

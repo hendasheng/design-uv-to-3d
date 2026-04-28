@@ -577,29 +577,6 @@ a {
   letter-spacing: 0;
 }
 
-.uv-open-link {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 58px;
-  height: 32px;
-  padding: 0 10px;
-  color: #342f27;
-  font-size: 13px;
-  font-weight: 700;
-  text-decoration: none;
-  border: 1px solid rgba(39, 35, 29, 0.16);
-  border-radius: 8px;
-  background: #fffdf7;
-}
-
-.uv-open-link:hover,
-.uv-open-link:focus-visible {
-  border-color: #b38437;
-  background: #efd49b;
-  outline: none;
-}
-
 .uv-switcher,
 .uv-wireframe-controls {
   display: flex;

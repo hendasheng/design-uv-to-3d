@@ -29,7 +29,9 @@ a {
 .app-shell {
   display: grid;
   grid-template-columns: 300px minmax(0, 1fr);
-  min-height: 100%;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
   background:
     linear-gradient(90deg, rgba(39, 35, 29, 0.06) 1px, transparent 1px),
     linear-gradient(180deg, rgba(39, 35, 29, 0.06) 1px, transparent 1px),
@@ -41,7 +43,7 @@ a {
   display: flex;
   flex-direction: column;
   gap: 24px;
-  min-height: 100vh;
+  min-height: 0;
   padding: 24px;
   color: #f5f2ea;
   background: #26221c;
@@ -80,12 +82,21 @@ a {
 
 .model-list {
   display: grid;
+  flex: 1 1 auto;
+  align-content: start;
   gap: 18px;
+  grid-auto-rows: max-content;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 4px;
+  scrollbar-gutter: stable;
 }
 
 .model-group {
   display: grid;
+  align-content: start;
   gap: 9px;
+  grid-template-rows: auto auto;
 }
 
 .model-group h2 {
@@ -135,6 +146,9 @@ a {
 .model-link strong,
 .model-link small {
   display: block;
+}
+
+.model-link strong {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -148,6 +162,8 @@ a {
   margin-top: 3px;
   color: #bdb5a7;
   font-size: 12px;
+  overflow-wrap: anywhere;
+  white-space: pre-line;
 }
 
 .sidebar-note {
@@ -167,7 +183,8 @@ a {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
   min-width: 0;
-  min-height: 100vh;
+  min-height: 0;
+  overflow: hidden;
   padding: 24px;
 }
 
@@ -1036,10 +1053,11 @@ a {
 @media (max-width: 860px) {
   .app-shell {
     grid-template-columns: 1fr;
+    grid-template-rows: auto minmax(0, 1fr);
   }
 
   .model-sidebar {
-    min-height: auto;
+    max-height: 38vh;
   }
 
   .model-list {
@@ -1051,7 +1069,7 @@ a {
   }
 
   .viewer-shell {
-    min-height: 70vh;
+    min-height: 0;
   }
 
   .workbench-grid {

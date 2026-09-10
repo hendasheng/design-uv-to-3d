@@ -10,6 +10,7 @@
 
 - 自动扫描 `public/models` 下的产品文件夹并生成模型目录
 - 按产品文件夹分组展示 GLB 模型
+- 支持按 `编号_序号_名称` 命名规则合并同编号模型：例如 `02_01_工牌.glb`、`02_02_工牌.glb` 会合并为一个模型条目，在 3D 区横向并列展示
 - 支持旋转、平移、缩放查看 3D 模型
 - 支持前、后、左、右、顶、底固定视角
 - 支持按硬边角度重算法线，便于检查模型是否过度平滑
@@ -24,16 +25,18 @@
 ## 目录结构
 
 ```text
-public/models/
-  示例模型/
-    01.glb
-  示例 UV/
-    01_UV.png
-  uv/
-    Blender_UV.png
-  README.md
-  产品文件夹/
-    本地模型.glb
+public/
+  models/
+    示例模型/
+      01.glb
+    示例 UV/
+      01_UV.png
+    uv/
+      Blender_UV.png
+    README.md
+    产品文件夹/
+      本地模型.glb
+  config.js
 src/
   main.tsx
   modelCatalog.ts
@@ -42,6 +45,7 @@ src/
     ModelViewer.tsx
 scripts/
   generate-model-catalog.mjs
+  start-dev.mjs
 ```
 
 ## 环境要求
@@ -63,6 +67,8 @@ npm install
 npm run dev
 ```
 
+开发服务器默认监听 `0.0.0.0:3001`。如果该端口已被本项目自己的 dev 服务器占用，脚本会直接打印访问地址后退出；如果被其他进程占用，会报错并显示占用进程信息。
+
 构建生产版本：
 
 ```bash
@@ -74,6 +80,56 @@ npm run build
 ```bash
 npm run preview
 ```
+
+直接用 Python 提供已构建的 `dist` 目录（需要 python3）：
+
+```bash
+npm run serve:dist
+```
+
+默认监听 `0.0.0.0:3000`。
+
+## 使用 OSS 加速模型资源
+
+如果局域网访问 GLB 很慢，可以把 `public/models` 下的资源上传到 OSS，并通过 `public/config.js` 让页面从 OSS 加载模型和 UV 图片。
+
+OSS 上建议保持和本地一致的目录结构，例如：
+
+```text
+https://your-bucket.oss-cn-hangzhou.aliyuncs.com/models/
+  glb/
+    02_01_工牌.glb
+    02_02_工牌.glb
+  uv/
+    Blender_UV.png
+```
+
+在 `public/config.js` 中配置：
+
+```js
+window.__MODEL_ASSET_BASE_URL__ = 'https://your-bucket.oss-cn-hangzhou.aliyuncs.com/models';
+```
+
+留空时，仍会使用本地 `/models/...` 路径。生产部署后也可以直接修改部署目录里的 `config.js`，不需要重新构建。
+
+如果 OSS 只迁移了某个分组，或 OSS 目录名和本地分组名不完全一致，可以使用路径重写：
+
+```js
+window.__MODEL_ASSET_BASE_URL__ = '';
+window.__MODEL_ASSET_PATH_REWRITES__ = {
+  '00_%E5%9F%BA%E7%A1%80%E6%A8%A1%E5%9E%8B/':
+    'https://your-bucket.oss-cn-hangzhou.aliyuncs.com/models/00_%E5%9F%BA%E7%A1%80%E6%A8%A1%E5%9E%8B_glb/',
+};
+```
+
+上面的 key 对应本地 `/models/00_基础模型/...`，value 对应 OSS 上实际存放 GLB 的目录。
+
+OSS 注意事项：
+
+- 需要允许浏览器跨域读取资源，配置 CORS，至少允许当前页面域名的 `GET` 请求。
+- `.glb` 建议设置 `Content-Type: model/gltf-binary`，图片保持对应的 `image/png`、`image/webp` 等类型。
+- 建议开启缓存响应头；模型文件名变更后重新运行 `npm run generate:models` 或重新构建。
+- 当前目录仍需要保留一份本地模型文件用于扫描生成列表；页面实际加载可走 OSS。
 
 ## 示例资源
 
@@ -97,6 +153,7 @@ npm run generate:models
 - `public/models` 下的每一个直接子文件夹会成为一个模型分组。
 - `public/models/uv` 是全局 UV 参考图库，不会成为模型分组。
 - 分组文件夹中的每一个 `.glb` 文件会成为一个可选择的模型。
+- 文件名符合 `编号_序号_名称` 规则（如 `02_01_工牌.glb`、`02_02_工牌.glb`）的同编号文件会合并为一个模型条目，在 3D 区横向并列展示；条目名称取共同后缀（如上例显示为 `02_工牌`）。
 - 如果分组文件夹中有图片文件，会优先作为该分组模型的 UV 参考图选项。
 - `public/models/uv` 下的图片会作为全局 UV 参考图选项，界面中可切换查看。
 - 文件路径会自动进行 URL 编码，支持中文文件夹名和文件名。
@@ -110,10 +167,13 @@ npm run generate:models
 3. 可选：将对应的 UV 参考图放入同一个产品文件夹，或放入 `public/models/uv` 作为全局参考图。
 4. 运行 `npm run dev` 或 `npm run generate:models` 重新生成目录。
 
+如果想将同一产品的多个部件文件合并为一个模型条目，按 `编号_序号_名称` 命名即可，例如 `02_01_工牌.glb`、`02_02_工牌.glb`。
+
 ## 使用说明
 
 - 左侧选择模型分组和具体模型。
 - 中央区域查看 3D 模型，可使用鼠标旋转、平移和缩放。
+- 同编号合并的多部件模型会在 3D 区横向并列展示，方便一次对照整体效果。
 - 点击视角按钮可快速切换前、后、左、右、顶、底视图。
 - 可用“硬边角度”切换原始法线和按角度平滑后的显示效果。
 - 将贴图图片拖入查看区域，或点击上传按钮选择图片，即可将贴图应用到当前模型。

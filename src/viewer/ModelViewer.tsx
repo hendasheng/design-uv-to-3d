@@ -1,6 +1,6 @@
 import { Canvas, useThree } from '@react-three/fiber';
-import { Bounds, Center, Environment, Grid, Html, OrbitControls, useBounds, useGLTF } from '@react-three/drei';
-import { Component, Suspense, useEffect, useMemo, useRef, useState } from 'react';
+import { Bounds, Grid, Html, OrbitControls, useBounds, useGLTF } from '@react-three/drei';
+import { Component, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ChangeEvent, DragEvent, PointerEvent } from 'react';
 import type { ReactNode } from 'react';
 import { Eye, Grid3X3, ImageIcon, Loader2, RotateCcw, TriangleAlert, Upload, X } from 'lucide-react';
@@ -20,7 +20,7 @@ import {
 } from 'three';
 import { toCreasedNormals } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib';
-import type { ModelEntry } from '../modelCatalog';
+import type { ModelEntry, ModelPartEntry } from '../modelCatalog';
 
 type ModelViewerProps = {
   models: ModelEntry[];
@@ -57,6 +57,14 @@ type MaterialSnapshot = {
   roughnessMap: Texture | null;
   transparent: boolean;
   transmission: number;
+};
+
+type ModelPartSize = {
+  depth: number;
+  height: number;
+  maxX: number;
+  minX: number;
+  width: number;
 };
 
 const viewPresetButtons: Array<{ label: string; value: ViewPreset }> = [
@@ -530,6 +538,7 @@ function useUploadedTexture(textureUrl: string | null, channel: TextureChannel, 
     let cancelled = false;
     let loadedTexture: Texture | null = null;
     const image = new Image();
+    image.crossOrigin = 'anonymous';
 
     image.onload = () => {
       // Fast path: color previews usually don't need per-pixel preprocessing.
@@ -627,6 +636,12 @@ function useUploadedTexture(textureUrl: string | null, channel: TextureChannel, 
       setTexture(nextTexture);
     };
 
+    image.onerror = () => {
+      if (!cancelled) {
+        setTexture(null);
+      }
+    };
+
     image.src = textureUrl;
 
     return () => {
@@ -696,6 +711,143 @@ function UvWireframeOverlay({
   return <canvas ref={canvasRef} className="uv-wireframe-overlay" aria-hidden="true" />;
 }
 
+function getModelParts(model: ModelEntry): ModelPartEntry[] {
+  return model.parts?.length
+    ? model.parts
+    : [
+        {
+          fileName: model.fileName,
+          name: model.name,
+          path: model.path,
+        },
+      ];
+}
+
+function measureSceneSize(scene: Object3D): ModelPartSize {
+  const bounds = new Box3().setFromObject(scene);
+  const size = new Vector3();
+
+  if (bounds.isEmpty()) {
+    return { depth: 1, height: 1, maxX: 0.5, minX: -0.5, width: 1 };
+  }
+
+  bounds.getSize(size);
+
+  return {
+    depth: Math.max(size.z, 0.001),
+    height: Math.max(size.y, 0.001),
+    maxX: bounds.max.x,
+    minX: bounds.min.x,
+    width: Math.max(size.x, 0.001),
+  };
+}
+
+function getModelPartPositions(modelParts: ModelPartEntry[], partSizes: Record<string, ModelPartSize>) {
+  const fallbackSize = { depth: 1, height: 1, maxX: 0.5, minX: -0.5, width: 1 };
+  const sizes = modelParts.map((modelPart) => partSizes[modelPart.path] ?? fallbackSize);
+  const widths = sizes.map((size) => size.width);
+  const largestWidth = Math.max(...widths, 1);
+  const largestDepth = Math.max(...sizes.map((size) => size.depth), 0.001);
+  const largestHeight = Math.max(...sizes.map((size) => size.height), 0.001);
+  const volumeFactor = Math.min(Math.max(Math.min(largestDepth, largestHeight) / largestWidth, 0), 1);
+  const gapRatio = 0.05 + volumeFactor * 0.22;
+  const gap = Math.min(Math.max(largestWidth * gapRatio, 0.05), 1.4);
+  const totalWidth = widths.reduce((sum, width) => sum + width, 0) + gap * Math.max(widths.length - 1, 0);
+  let cursor = -totalWidth / 2;
+
+  return modelParts.reduce<Record<string, number>>((positions, modelPart, index) => {
+    const size = sizes[index];
+    positions[modelPart.path] = cursor - size.minX;
+    cursor += size.width + gap;
+    return positions;
+  }, {});
+}
+
+function ModelPartAsset({
+  modelPart,
+  selectedUvImagePath,
+  textureSlots,
+  textureTransparencyEnabled,
+  shadingPreset,
+  positionX,
+  onReady,
+  onUvSegmentsReady,
+  uvWireframeEnabled,
+}: {
+  modelPart: ModelPartEntry;
+  selectedUvImagePath?: string;
+  textureSlots: TextureSlots;
+  textureTransparencyEnabled: boolean;
+  shadingPreset: ShadingPreset;
+  positionX: number;
+  onReady?: (modelPart: ModelPartEntry, size: ModelPartSize) => void;
+  onUvSegmentsReady?: (modelPart: ModelPartEntry, segments: UvWireframeSegments) => void;
+  uvWireframeEnabled: boolean;
+}) {
+  const gltf = useGLTF(modelPart.path);
+  const colorTextureUrl = textureSlots.color.url ?? selectedUvImagePath ?? null;
+  const colorTexture = useUploadedTexture(colorTextureUrl, 'color', textureTransparencyEnabled);
+  const metalnessTexture = useUploadedTexture(textureSlots.metalness.url, 'metalness', false);
+  const bumpTexture = useUploadedTexture(textureSlots.bump.url, 'bump', false);
+  const alphaTexture = useUploadedTexture(textureSlots.alpha.url, 'alpha', false);
+  const uploadedTextures = useMemo<LoadedTextureSlots>(
+    () => ({
+      alpha: alphaTexture,
+      bump: bumpTexture,
+      color: colorTexture,
+      metalness: metalnessTexture,
+    }),
+    [alphaTexture, bumpTexture, colorTexture, metalnessTexture],
+  );
+  const scene = useMemo(() => cloneSceneForDisplay(gltf.scene, shadingPreset), [gltf.scene, shadingPreset]);
+  const size = useMemo(() => measureSceneSize(scene), [scene]);
+
+  useEffect(() => {
+    return () => disposeDisplayScene(scene);
+  }, [scene]);
+
+  useEffect(() => {
+    applyTexturesToScene(scene, uploadedTextures, textureTransparencyEnabled);
+  }, [scene, textureTransparencyEnabled, uploadedTextures]);
+
+  useEffect(() => {
+    onReady?.(modelPart, size);
+  }, [modelPart, onReady, scene, size]);
+
+  useEffect(() => {
+    if (!uvWireframeEnabled) {
+      return;
+    }
+
+    const cachedSegments = uvWireframeSegmentsCache.get(modelPart.path);
+    if (cachedSegments) {
+      onUvSegmentsReady?.(modelPart, cachedSegments);
+      return;
+    }
+
+    let cancelled = false;
+    const idleHandle = scheduleIdleTask(() => {
+      const segments = buildUvWireframeSegments(gltf.scene);
+      uvWireframeSegmentsCache.set(modelPart.path, segments);
+
+      if (!cancelled) {
+        onUvSegmentsReady?.(modelPart, segments);
+      }
+    });
+
+    return () => {
+      cancelled = true;
+      cancelIdleTask(idleHandle);
+    };
+  }, [gltf.scene, modelPart, onUvSegmentsReady, uvWireframeEnabled]);
+
+  return (
+    <group position={[positionX, 0, 0]}>
+      <primitive object={scene} />
+    </group>
+  );
+}
+
 function ModelAsset({
   model,
   selectedUvImagePath,
@@ -715,67 +867,86 @@ function ModelAsset({
   onUvSegmentsReady?: (fileName: string, segments: UvWireframeSegments) => void;
   uvWireframeEnabled: boolean;
 }) {
-  const gltf = useGLTF(model.path);
-  const colorTextureUrl = textureSlots.color.url ?? selectedUvImagePath ?? null;
-  const colorTexture = useUploadedTexture(colorTextureUrl, 'color', textureTransparencyEnabled);
-  const metalnessTexture = useUploadedTexture(textureSlots.metalness.url, 'metalness', false);
-  const bumpTexture = useUploadedTexture(textureSlots.bump.url, 'bump', false);
-  const alphaTexture = useUploadedTexture(textureSlots.alpha.url, 'alpha', false);
-  const uploadedTextures = useMemo<LoadedTextureSlots>(
-    () => ({
-      alpha: alphaTexture,
-      bump: bumpTexture,
-      color: colorTexture,
-      metalness: metalnessTexture,
-    }),
-    [alphaTexture, bumpTexture, colorTexture, metalnessTexture],
-  );
-  const scene = useMemo(() => cloneSceneForDisplay(gltf.scene, shadingPreset), [gltf.scene, shadingPreset]);
+  const modelParts = useMemo(() => getModelParts(model), [model]);
+  const [readyPartPaths, setReadyPartPaths] = useState<Set<string>>(() => new Set());
+  const [partSizes, setPartSizes] = useState<Record<string, ModelPartSize>>({});
+  const [partUvSegments, setPartUvSegments] = useState<Record<string, UvWireframeSegments>>({});
+  const partPositions = useMemo(() => getModelPartPositions(modelParts, partSizes), [modelParts, partSizes]);
+  const handlePartReady = useCallback((readyModelPart: ModelPartEntry, size: ModelPartSize) => {
+    setReadyPartPaths((currentPaths) => {
+      if (currentPaths.has(readyModelPart.path)) {
+        return currentPaths;
+      }
+
+      return new Set(currentPaths).add(readyModelPart.path);
+    });
+    setPartSizes((currentSizes) => {
+      const currentSize = currentSizes[readyModelPart.path];
+
+      if (
+        currentSize?.width === size.width &&
+        currentSize.height === size.height &&
+        currentSize.depth === size.depth &&
+        currentSize.minX === size.minX &&
+        currentSize.maxX === size.maxX
+      ) {
+        return currentSizes;
+      }
+
+      return {
+        ...currentSizes,
+        [readyModelPart.path]: size,
+      };
+    });
+  }, []);
+  const handlePartUvSegmentsReady = useCallback((readyModelPart: ModelPartEntry, segments: UvWireframeSegments) => {
+    setPartUvSegments((currentSegments) => {
+      if (currentSegments[readyModelPart.path] === segments) {
+        return currentSegments;
+      }
+
+      return {
+        ...currentSegments,
+        [readyModelPart.path]: segments,
+      };
+    });
+  }, []);
 
   useEffect(() => {
-    return () => disposeDisplayScene(scene);
-  }, [scene]);
-
-  useEffect(() => {
-    applyTexturesToScene(scene, uploadedTextures, textureTransparencyEnabled);
-  }, [scene, textureTransparencyEnabled, uploadedTextures]);
-
-  useEffect(() => {
-    onReady?.(model.fileName);
-  }, [model.fileName, onReady, scene]);
+    if (readyPartPaths.size === modelParts.length) {
+      onReady?.(model.fileName);
+    }
+  }, [model.fileName, modelParts.length, onReady, readyPartPaths]);
 
   useEffect(() => {
     if (!uvWireframeEnabled) {
       return;
     }
 
-    const cachedSegments = uvWireframeSegmentsCache.get(model.path);
-    if (cachedSegments) {
-      onUvSegmentsReady?.(model.fileName, cachedSegments);
-      return;
+    if (modelParts.every((modelPart) => partUvSegments[modelPart.path])) {
+      onUvSegmentsReady?.(
+        model.fileName,
+        modelParts.flatMap((modelPart) => partUvSegments[modelPart.path]),
+      );
     }
-
-    let cancelled = false;
-    const idleHandle = scheduleIdleTask(() => {
-      const segments = buildUvWireframeSegments(gltf.scene);
-      uvWireframeSegmentsCache.set(model.path, segments);
-
-      if (!cancelled) {
-        onUvSegmentsReady?.(model.fileName, segments);
-      }
-    });
-
-    return () => {
-      cancelled = true;
-      cancelIdleTask(idleHandle);
-    };
-  }, [gltf.scene, model.fileName, model.path, onUvSegmentsReady, uvWireframeEnabled]);
+  }, [model.fileName, modelParts, onUvSegmentsReady, partUvSegments, uvWireframeEnabled]);
 
   return (
     <group name="active-model-root">
-      <Center>
-        <primitive object={scene} />
-      </Center>
+      {modelParts.map((modelPart) => (
+        <ModelPartAsset
+          key={modelPart.path}
+          modelPart={modelPart}
+          selectedUvImagePath={selectedUvImagePath}
+          textureSlots={textureSlots}
+          textureTransparencyEnabled={textureTransparencyEnabled}
+          shadingPreset={shadingPreset}
+          positionX={partPositions[modelPart.path] ?? 0}
+          onReady={handlePartReady}
+          onUvSegmentsReady={handlePartUvSegmentsReady}
+          uvWireframeEnabled={uvWireframeEnabled}
+        />
+      ))}
     </group>
   );
 }
@@ -830,9 +1001,9 @@ function Scene({
     <>
       <color attach="background" args={['#d8d5cc']} />
       <ambientLight intensity={0.35} />
+      <hemisphereLight args={['#f5f0e6', '#8c8578', 0.55]} />
       <directionalLight position={[5, 6, 4]} intensity={1.05} />
       <directionalLight position={[-4, 2, -3]} intensity={0.35} />
-      <Environment preset="warehouse" environmentIntensity={0.45} />
 
       {gridVisible ? (
         <Grid
@@ -852,6 +1023,7 @@ function Scene({
         <Bounds clip margin={1.35}>
           <Suspense fallback={null}>
             <ModelAsset
+              key={activeModel.id}
               model={activeModel}
               selectedUvImagePath={selectedUvImagePath}
               textureSlots={textureSlots}
@@ -1349,6 +1521,7 @@ export function ModelViewer({ models }: ModelViewerProps) {
                   <div className="canvas-overlay-copy">
                     <strong>模型没有加载成功</strong>
                     <span>{activeModel.fileName}</span>
+                    <small>{activeModel.path}</small>
                     <small>请刷新页面重试，或先切换到示例模型确认当前电脑是否能正常显示 3D。</small>
                   </div>
                 </>

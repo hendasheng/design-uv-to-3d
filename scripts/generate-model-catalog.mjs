@@ -26,6 +26,40 @@ function nameWithoutExtension(fileName) {
   return fileName.replace(/\.[^.]+$/, '');
 }
 
+function getSequenceInfo(fileName) {
+  const name = nameWithoutExtension(fileName);
+  const match = name.match(/^(\d+)_\d+_(.+)$/);
+
+  if (!match) {
+    return null;
+  }
+
+  return {
+    rootNumber: match[1],
+    suffix: match[2],
+  };
+}
+
+function getCommonPrefix(values) {
+  if (values.length === 0) {
+    return '';
+  }
+
+  let prefix = values[0];
+
+  for (const value of values.slice(1)) {
+    while (prefix && !value.startsWith(prefix)) {
+      prefix = prefix.slice(0, -1);
+    }
+  }
+
+  return prefix.replace(/[_\-\s]+$/g, '');
+}
+
+function getModelPartLabel(fileName) {
+  return nameWithoutExtension(fileName).match(/^\d+_\d+/)?.[0] ?? nameWithoutExtension(fileName);
+}
+
 function toUvEntry(imagePath) {
   const fileName = path.basename(imagePath);
 
@@ -97,14 +131,55 @@ async function buildCatalog() {
       .map((entry) => path.join(groupDir, entry.name))
       .sort((a, b) => path.basename(a).localeCompare(path.basename(b), 'zh-Hans-CN'));
 
+    const modelSets = new Map();
+
     for (const glbPath of glbFiles) {
-      const relativePath = path.relative(modelsDir, glbPath);
+      const sequenceInfo = getSequenceInfo(path.basename(glbPath));
+      const setKey = sequenceInfo ? `sequence:${sequenceInfo.rootNumber}` : `single:${path.basename(glbPath)}`;
+      const modelSet = modelSets.get(setKey) ?? {
+        files: [],
+        rootNumber: sequenceInfo?.rootNumber,
+        suffixes: [],
+      };
+
+      modelSet.files.push(glbPath);
+
+      if (sequenceInfo) {
+        modelSet.suffixes.push(sequenceInfo.suffix);
+      }
+
+      modelSets.set(setKey, modelSet);
+    }
+
+    for (const modelSet of modelSets.values()) {
+      const firstGlbPath = modelSet.files[0];
+      const firstRelativePath = path.relative(modelsDir, firstGlbPath);
+      const parts = modelSet.files.map((glbPath) => ({
+        fileName: path.basename(glbPath),
+        name: nameWithoutExtension(path.basename(glbPath)),
+        path: toPublicPath(glbPath),
+      }));
+      const commonName = modelSet.rootNumber ? getCommonPrefix(modelSet.suffixes) : '';
+      const displayName =
+        parts.length > 1 && modelSet.rootNumber
+          ? [modelSet.rootNumber, commonName].filter(Boolean).join('_')
+          : nameWithoutExtension(path.basename(firstGlbPath));
+      const fileName =
+        parts.length > 1
+          ? `${parts.length} 个模型：\n${parts.map((part) => getModelPartLabel(part.fileName)).join(' / ')}`
+          : path.basename(firstGlbPath);
+      const relativePath =
+        parts.length > 1
+          ? modelSet.files.map((glbPath) => path.relative(modelsDir, glbPath)).join('|')
+          : firstRelativePath;
+
       models.push({
         id: `model-${hashPath(relativePath)}`,
-        name: nameWithoutExtension(path.basename(glbPath)),
+        name: displayName,
         groupName: group.name,
-        fileName: path.basename(glbPath),
-        path: toPublicPath(glbPath),
+        fileName,
+        path: toPublicPath(firstGlbPath),
+        ...(parts.length > 1 ? { parts } : {}),
         uvImages,
         uvImageFileName: groupUv?.fileName,
         uvImagePath: groupUv?.path,
